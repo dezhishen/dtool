@@ -7,7 +7,6 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"testing"
 	"time"
 
@@ -106,16 +105,11 @@ func TestPerfLoadModeMemoryRatio(t *testing.T) {
 	if testing.Short() {
 		t.Skip("-short：跳过性能回归")
 	}
-	// 更激进的 GC：默认 GOGC 下「未及时回收的垃圾」会盖过流式的真实优势，
-	// 让测量结果在 4–34MB 之间乱跳。调低 GOGC 后两种方式都被同等对待，
-	// 采样值更接近各自的存活集，断言才有意义（用例结束恢复）。
-	defer debug.SetGCPercent(debug.SetGCPercent(50))
-
 	path, size := writeJSONRows(t, t.TempDir(), perfRatioRows)
 	const count = `SELECT COUNT(*) AS n FROM d`
 
-	full := perftest.Measure(func() { runLoad(t, path, LoadFull, count) })
-	stream := perftest.Measure(func() { runLoad(t, path, LoadStream, count) })
+	full := perftest.Measure(func() { runLoad(t, path, LoadFull, count) }, perftest.Live)
+	stream := perftest.Measure(func() { runLoad(t, path, LoadStream, count) }, perftest.Live)
 	t.Logf("输入 %s（%d 行，%.1fMB）：full 峰值 %.1fMB / 累计分配 %.1fMB；stream 峰值 %.1fMB / 累计分配 %.1fMB；按文件大小 full ≈ ×%.1f、stream ≈ ×%.1f",
 		filepath.Base(path), perfRatioRows, perftest.MiB(size),
 		perftest.MiB(full.Peak), perftest.MiB(full.Alloc),

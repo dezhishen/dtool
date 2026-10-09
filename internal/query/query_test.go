@@ -178,18 +178,46 @@ func TestMaxRowsAndErrors(t *testing.T) {
 	}
 }
 
+// TestTimeoutAppliesToQueryNotLoading：--timeout 只约束查询阶段。
+// 用「载入必然远超超时」的输入来验证：若超时被算进载入（老行为），
+// 进程会在毫秒级带着 load 阶段的错误返回；现在它必须把整个文件装完。
+// 查询阶段本身失败是允许的（那正是超时该管的地方），但归因不能落到载入上。
 func TestTimeoutAppliesToQueryNotLoading(t *testing.T) {
-	ws, cwd := setup(t)
-	// 极小的 --timeout：载入照常完成（否则不会出现表），失败归因于查询阶段
-	_, err := Run(context.Background(), Options{SQL: `SELECT COUNT(*) AS n FROM d`, Roots: []string{ws, cwd},
-		Sandbox: true, Sources: map[string]string{"d": filepath.Join(cwd, "local.json")},
-		LoadMode: "stream", Timeout: time.Nanosecond, MaxRows: 10})
-	var te *types.Error
-	if !errors.As(err, &te) || !strings.Contains(te.Message, "query timeout") {
-		t.Fatalf("err = %v", err)
+	const rows = 10000
+	dir := t.TempDir()
+	path, _ := writeJSONRows(t, dir, rows)
+
+	off := uint64(0)
+	start := time.Now()
+	res, err := Run(context.Background(), Options{
+		SQL:       `SELECT COUNT(*) AS n FROM d`,
+		Roots:     []string{dir},
+		Sandbox:   true,
+		Sources:   map[string]string{"d": path},
+		LoadMode:  "stream",
+		Timeout:   time.Nanosecond,
+		MaxRows:   10,
+		MaxMemory: &off,
+	})
+	elapsed := time.Since(start)
+
+	// 正常载入 1 万行约 0.1s；被超时掐断则会在 1ms 内返回，5ms 足以区分
+	if elapsed < 5*time.Millisecond {
+		t.Fatalf("载入被 --timeout 提前中止：耗时仅 %s", elapsed)
 	}
-	if strings.Contains(te.Message, "载入超时") {
-		t.Fatalf("载入不应受 --timeout 限制: %v", err)
+	if err != nil {
+		var te *types.Error
+		if !errors.As(err, &te) {
+			t.Fatalf("err = %v", err)
+		}
+		if strings.Contains(te.Message, "载入") || strings.Contains(te.Message, "load") {
+			t.Fatalf("失败不应归因于载入：%v", err)
+		}
+		return
+	}
+	// 查询也成功（有些驱动不检查已过期的 ctx）时，结果必须是完整的，说明载入没被打断
+	if v, _ := res.Rows[0].Get("n"); v != int64(rows) {
+		t.Fatalf("n = %#v，载入未完成", v)
 	}
 }
 

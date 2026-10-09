@@ -818,7 +818,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 
 `--timeout` 只约束查询阶段；载入是本地的读写与 CPU 工作，大文件可能远超默认 60s，把它算进去会让默认值变成陷阱（载入由内存看门狗与信号中断兜底）。
 
-**回归测试**：结论由测试而不是文档守住。`internal/query/perf_test.go` 的 `TestPerfLoadModeMemoryRatio` 断言流式峰值堆比整块解析低 1.3 倍以上（实测 2.3–3.7 倍；同时记录累计分配做交叉印证——它被 SQLite 插入开销主导，两种方式只差 3%，因此只记录不断言），`internal/pipeline/perf_test.go` 的 `TestPerfConvertExcelMemory` 断言转换峰值不超过 `xlsxPeakFactor × 1.3`（HeapAlloc 口径低于 CLI 的 RSS，留 30% 余量，用来拦量级回归）。峰值堆与分配量采样放在只被 `_test.go` 引用的 `internal/perftest`，吞吐走 `Benchmark*`（`make bench`，`DTOOL_BENCH_ROWS` 放大）。这些随默认的 `go test ./...` 运行（`-short` 跳过），CI 另跑一轮 `-benchtime 1x` 的基准冒烟。
+**回归测试**：结论由测试而不是文档守住。`internal/query/perf_test.go` 的 `TestPerfLoadModeMemoryRatio` 断言流式存活堆峰值比整块解析低 1.3 倍以上（实测 10–20 倍；采样方式见下——直接读 HeapAlloc 会把未回收的垃圾算进来，在 CI 上曾把差距压到 1.28 倍而误报），`internal/pipeline/perf_test.go` 的 `TestPerfConvertExcelMemory` 断言转换峰值不超过 `xlsxPeakFactor × 1.3`（HeapAlloc 口径低于 CLI 的 RSS，留 30% 余量，用来拦量级回归）。峰值采样放在只被 `_test.go` 引用的 `internal/perftest`，两种口径并列：`Inclusive`（直接读 HeapAlloc，含垃圾，接近 RSS，适合上界断言）与 `Live`（每次采样先 GC 取存活集，适合比较「谁更省内存」）；吞吐走 `Benchmark*`（`make bench`，`DTOOL_BENCH_ROWS` 放大）。这些随默认的 `go test ./...` 运行（`-short` 跳过），CI 另跑一轮 `-benchtime 1x` 的基准冒烟。
 
 ### 8.5 图表生成模块
 

@@ -95,11 +95,11 @@ func TestPerfConvertExcelMemory(t *testing.T) {
 	env := newPerfEnv(t, dir)
 	path, size := writeBigXlsx(t, dir, perfXlsxRows())
 
-	peak := perftest.PeakHeap(func() {
+	peak := perftest.Measure(func() {
 		if _, err := env.Convert(ConvertParams{Input: path, Name: "perf"}, ""); err != nil {
 			t.Fatal(err)
 		}
-	})
+	}, perftest.Inclusive).Peak
 	factor := float64(peak) / float64(size)
 	limit := float64(size) * xlsxPeakFactor * 1.3
 	t.Logf("%d 行 xlsx：文件 %.2fMB，峰值堆 %.1fMB（×%.0f，预检按 ×%d 估算）",

@@ -90,7 +90,7 @@ dtool query --timeout 10m      --sql '...'    # 查询本身很重时再调大�
 
 | 用例 | 断言 |
 |------|------|
-| `TestPerfLoadModeMemoryRatio` | 流式装入的峰值堆须比整块解析低 1.3 倍以上（实测 2.3–3.7 倍） |
+| `TestPerfLoadModeMemoryRatio` | 流式装入的存活堆峰值须比整块解析低 1.3 倍以上（每 10ms 停一次世界取存活集，实测 10–20 倍） |
 | `TestPerfConvertExcelMemory` | Excel 转换的峰值堆不得超过预检倍率 `×260 × 1.3`，防止「实际变差而预检没跟上」导致静默 OOM |
 
 吞吐用基准看，需要显式开启：
