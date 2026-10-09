@@ -81,6 +81,21 @@ dtool version --deps       # 附带编译进二进制的依赖模块及版本
 
 [examples/](examples/README.md) 提供 4 个可直接运行的示例（销售报表、人员分析、脏数据处理、pipeline 与 Action 协作），含数据源文件：`make build && bash examples/run-all.sh`。
 
+## 场景手册（按职业）
+
+不知道从哪下手时，从自己的职业看起：[docs/scenarios/](docs/scenarios/README.md) 每个职业一份文档，
+从「一条 SQL 拿到答案」递进到「连表 + 出图 + 导出 + 留痕」，命令都能对着示例数据直接跑。
+
+| 场景 | 典型问题 |
+|------|----------|
+| [销售 / 业务运营](docs/scenarios/sales.md) | 各区卖了多少？哪些客户在贡献增长？ |
+| [财务 / 会计](docs/scenarios/finance.md) | 收入口径对不对？有没有对不上的账？ |
+| [HR / 人事](docs/scenarios/hr.md) | 各部门薪酬结构？谁是待评估新人？ |
+| [电商 / 仓储运营](docs/scenarios/ecommerce.md) | 哪些 SKU 是爆款？退款率、复购如何？ |
+| [市场 / 增长](docs/scenarios/marketing.md) | 增长从哪来？环比、新客、客单价？ |
+| [管理者 / 汇报](docs/scenarios/management.md) | 5 分钟给出一页图表，还要说得清来源 |
+| [数据 / BI](docs/scenarios/analyst.md) | 手上是 JSON、大文件、脏数据怎么查？ |
+
 ## 装入方式与大数据量
 
 JSON → 内存 SQLite 有两种装入方式，`--load-mode` 可选 `auto`（默认）/ `stream` / `full`：
