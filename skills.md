@@ -7,6 +7,30 @@ description: 本地数据 Pipeline CLI。用于把 Excel 转成可复用的数�
 
 单二进制、无外部依赖。所有命令的 **stdout 都是结构化 JSON**，失败时 stdout 仍输出错误 JSON、退出码非 0，人类可读信息写 stderr。
 
+## 安装与升级
+
+单二进制、无外部依赖（Linux/macOS/Windows × amd64/arm64）。从 Releases 下载对应平台的包，解包后即可用：
+
+| 平台 | 包名 |
+|------|------|
+| Linux / macOS | `dtool_<版本>_<os>_<arch>.tar.gz` |
+| Windows | `dtool_<版本>_windows_<arch>.zip`（内含 `dtool.exe`） |
+
+```bash
+V=v0.1.0                                             # 最新版本；预览版形如 v0.1.0-preview.2
+# 自动取最新正式版：V=$(curl -sSL https://api.github.com/repos/dezhishen/dtool/releases/latest \
+#   | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)   # 含预览版用 /releases（列表第一项）
+base=https://github.com/dezhishen/dtool/releases/download/$V
+curl -LO "$base/dtool_${V#v}_linux_amd64.tar.gz" && curl -LO "$base/checksums.txt"
+sha256sum -c --ignore-missing checksums.txt          # macOS 用 shasum -a 256 -c
+tar -xzf "dtool_${V#v}_linux_amd64.tar.gz" && install -m 0755 dtool ~/.local/bin/
+dtool version                                        # 确认可用（含 version/channel/os/arch）
+```
+
+- 装完包内还有 `README.md`、`skills.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`。
+- 升级自身：`dtool --update [--pre]` 只检查，`dtool upgrade [--pre]` 动手（下载后校验 `checksums.txt` 的 sha256 并跑一次自检，任一步失败都不改动现有文件）。二进制要放在**有写权限**的目录。
+- **只有预览 tag 时加 `--pre`**，否则预览版不算可升级版本；不确定当前构建类型看 `dtool version` 的 `channel`（stable/preview/dev/local）。
+
 ## 核心概念
 
 | 概念 | 说明 |

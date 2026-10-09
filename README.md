@@ -27,6 +27,43 @@ dtool actions list --limit 5
 
 SQL 表名：用 `--source 别名=引用`，或用**双引号**包裹文件路径（单引号无效）。数值列按整列推断类型，`WHERE`/`ORDER BY` 按数值比较。
 
+## 安装
+
+从 [Releases](https://github.com/dezhishen/dtool/releases) 下载对应平台的包（单二进制、无外部依赖，Linux/macOS/Windows × amd64/arm64）：
+
+| 平台 | 包名 |
+|------|------|
+| Linux / macOS | `dtool_<版本>_<os>_<arch>.tar.gz` |
+| Windows | `dtool_<版本>_windows_<arch>.zip`（内含 `dtool.exe`） |
+
+包内除可执行文件外还有 `README.md`、`skills.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`。
+
+```bash
+# Linux / macOS（以 linux-amd64 为例，macOS 换成 darwin_amd64 或 darwin_arm64）
+V=v0.1.0                                              # 最新版本；预览版形如 v0.1.0-preview.2
+base=https://github.com/dezhishen/dtool/releases/download/$V
+curl -LO "$base/dtool_${V#v}_linux_amd64.tar.gz"
+curl -LO "$base/checksums.txt"
+sha256sum -c --ignore-missing checksums.txt           # macOS 用 shasum -a 256 -c
+tar -xzf "dtool_${V#v}_linux_amd64.tar.gz"
+sudo install -m 0755 dtool /usr/local/bin/            # 放进 PATH
+dtool version                                         # 确认可用
+```
+
+```powershell
+# Windows（PowerShell）
+$V = "v0.1.0"                                        # 最新版本
+$base = "https://github.com/dezhishen/dtool/releases/download/$V"
+Invoke-WebRequest "$base/dtool_$($V.TrimStart('v'))_windows_amd64.zip" -OutFile dtool.zip
+Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
+Expand-Archive dtool.zip -DestinationPath .
+.\dtool.exe version                                   # 确认可用
+```
+
+不想每次手改版本号时，可从 `https://api.github.com/repos/dezhishen/dtool/releases/latest` 取 `tag_name`（只含正式版；要预览版就换成 `.../releases` 列表的第一项）。
+
+请装到**有写权限**的目录：`dtool --update [--pre]` 检查新版本、`dtool upgrade [--pre]` 会替换自身（详见下文）。
+
 ## 版本与构建元数据
 
 ```bash
