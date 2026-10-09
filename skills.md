@@ -82,6 +82,48 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 - 沙箱默认开启：只允许单条 `SELECT`/`WITH`；文件只能来自工作区、当前目录或 `--source`。不要尝试 `PRAGMA`/`ATTACH`/多语句。
 - 结果过大会报错（`--max-rows`，默认 10000）：加 `LIMIT` 或先聚合。
 
+## 连表查询（JOIN）
+
+同一个内存 SQLite 里**每个数据源 = 一张表**，任意 JOIN 都能写。表名解析顺序：
+
+1. `--source 别名=引用` 的别名（引用可为 `dataset:<名>` / `action:<id>` / `latest:<type>` / 文件路径）
+2. FROM 位置上的**数据集名**（无需 `--source`）
+3. **双引号**包裹的文件路径（单引号是字符串，会报 no such column）
+
+```bash
+# 1) 先把各工作表转成数据集
+dtool convert --input sales.xlsx --sheet 订单 --name orders
+dtool convert --input sales.xlsx --sheet 客户 --name customers
+
+# 2) 数据集名直接当表名（中文/特殊字符列名用双引号）
+dtool query --sql 'SELECT c."客户名称", COUNT(*) AS 单数, SUM(o."金额") AS 总额
+  FROM orders o JOIN customers c ON o."客户ID" = c."客户ID"
+  GROUP BY 1 ORDER BY 总额 DESC LIMIT 5'
+
+# 3) 显式别名，可与文件路径混用
+dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.json \
+  --sql 'SELECT c."城市", SUM(o."金额") AS 总额 FROM o JOIN c ON o."客户ID" = c."客户ID" GROUP BY 1'
+```
+
+支持 `INNER`/`LEFT`/`CROSS JOIN`、`WITH`（CTE）、子查询、`UNION [ALL]`、窗口函数
+（`ROW_NUMBER`/`RANK`/`LAG` 等）；沙箱仍只允许**单条 `SELECT`/`WITH`**，`PRAGMA`/`ATTACH`/多语句会被拒。
+
+要点与坑：
+
+- **JOIN 键的类型**：列类型是**整列推断**的结果。带前导零或 >15 位的 ID 会保持 `TEXT`
+  （如示例的 `客户ID`），两边都用字符串比较；类型不一致时用 `CAST(x AS TEXT)` 显式对齐。
+- **NULL 语义**：`LEFT JOIN` 未匹配的一侧是 NULL，统计个数要用 `COUNT(o.列)`，不要用 `COUNT(*)`。
+- **内存**：参与 JOIN 的每张表都要装进内存 SQLite，用量是各源之和（`--load-mode` 对每个源分别生效）。
+- **结果体积**：`--max-rows`（默认 10000）会拦截大结果，先聚合或加 `LIMIT`；要全量就 `--max-rows 0`
+  或 `--format xlsx --output`。
+- 写 SQL 前先 `dtool datasets show <name>` 看列名与类型；表名拼错会提示「用 `--source` 绑定或把路径用双引号包裹」。
+
+## 场景手册
+
+按职业组织的实操场景（销售 / 财务 / HR / 电商 / 市场 / 管理 / BI）见
+[docs/scenarios/](docs/scenarios/README.md)：每个场景从「一条 SQL」递进到「连表 + 出图 + 导出 + 留痕」，
+命令都能对着 `examples/data/` 直接跑。
+
 ## 读取结果的方式
 
 - 默认只读 Action 的 `output.preview`（前 20 行）+ `columns` + `summary`；`preview_truncated: true` 才需要读完整产物（`actions output <id>`）。
