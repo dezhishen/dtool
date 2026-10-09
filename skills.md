@@ -118,12 +118,6 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
   或 `--format xlsx --output`。
 - 写 SQL 前先 `dtool datasets show <name>` 看列名与类型；表名拼错会提示「用 `--source` 绑定或把路径用双引号包裹」。
 
-## 场景手册
-
-按职业组织的实操场景（销售 / 财务 / HR / 电商 / 市场 / 管理 / BI）见
-[docs/scenarios/](docs/scenarios/README.md)：每个场景从「一条 SQL」递进到「连表 + 出图 + 导出 + 留痕」，
-命令都能对着 `examples/data/` 直接跑。
-
 ## 读取结果的方式
 
 - 默认只读 Action 的 `output.preview`（前 20 行）+ `columns` + `summary`；`preview_truncated: true` 才需要读完整产物（`actions output <id>`）。
