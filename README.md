@@ -79,7 +79,20 @@ dtool version --deps       # 附带编译进二进制的依赖模块及版本
 
 ## 示例
 
-[examples/](examples/README.md) 提供 4 个可直接运行的示例，含数据源文件，每个示例目录下都有 README 说明「什么场景、逐步做了什么、产物是什么」：[销售报表](examples/01-sales-report/README.md) · [人员分析](examples/02-hr-analysis/README.md) · [脏数据处理](examples/03-messy-data/README.md) · [pipeline 与 Action 协作](examples/04-pipeline-actions/README.md)。运行：`make build && bash examples/run-all.sh`。
+[examples/](examples/README.md) 提供 4 个可直接运行的示例，数据源在 `examples/data/`。
+每个示例目录下都有一份 README，写清「什么场景下用它、逐步做了什么、产物是什么、有哪些坑」：
+
+| 示例 | 什么场景 | 数据源 | 产物 |
+|------|----------|--------|------|
+| [01 销售报表](examples/01-sales-report/README.md) | 多工作表工作簿 → 拆成多张表 → JOIN → 出图 + 导 Excel | `sales.xlsx`（订单 120 行、客户 15 行） | `region.md`、`region.png`、`top_customers.xlsx` |
+| [02 人员分析](examples/02-hr-analysis/README.md) | 花名册：前导零工号、可空列、日期过滤 | `hr.xlsx`（员工 60 行） | `headcount.png`、`recent_hires.csv`、`no_rating.xlsx` |
+| [03 脏数据处理](examples/03-messy-data/README.md) | 手工做的脏 Excel：先看自动修正清单，再用 SQL 清洗 | `messy.xlsx`（故意做脏） | 数据集与 `warnings`（控制台输出） |
+| [04 pipeline 与 Action](examples/04-pipeline-actions/README.md) | 一条命令出图、复用数据集、口径注释与血缘追溯 | `sales.xlsx` | `trend.png`、`.dtool/actions/` |
+
+```bash
+make build && bash examples/run-all.sh     # 全部运行，输出在 examples/out/<示例名>/
+bash examples/01-sales-report/run.sh       # 只跑单个
+```
 
 ## 场景手册（按职业）
 
