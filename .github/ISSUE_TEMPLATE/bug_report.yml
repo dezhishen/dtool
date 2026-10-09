@@ -1,0 +1,30 @@
+name: Bug 报告
+description: 报告 dtool 的问题
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: "`dtool --version` 的输出"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: 执行的命令
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: action
+    attributes:
+      label: 相关 Action
+      description: 失败 Action 的内容（`dtool actions show <id>`）或 stdout 的错误 JSON
+      render: json
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为与实际行为
+    validations:
+      required: true

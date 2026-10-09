@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          if ! unformatted="$(gofmt -l .)"; then exit 1; fi
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: go mod tidy 无差异
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: shell scripts
+        run: bash -n scripts/*.sh
+
+  # PR 与 release/** 分支：只验证能交叉编译并打包
+  cross-build:
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 交叉编译（无 CGO）
+        run: make build-all release-build VERSION=ci
+
+  # 推送到 main：测试通过后产出各平台可执行文件，作为 workflow artifact 供测试下载。
+  # 不创建 tag/Release，因此不会被 `dtool --update` 检测到；版本号为 dev-<run id>，并嵌入 commit 等元数据。
+  dev-build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    env:
+      DEV_VERSION: dev-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 构建全部平台
+        run: make release-build VERSION="$DEV_VERSION"
+      - name: 冒烟：校验嵌入的版本与元数据
+        run: |
+          mkdir -p /tmp/smoke && tar -xzf "dist/dtool_${DEV_VERSION}_linux_amd64.tar.gz" -C /tmp/smoke
+          out="$(/tmp/smoke/dtool version)"
+          echo "$out"
+          grep -q "\"version\": \"${DEV_VERSION}\"" <<<"$out"
+          grep -q "\"channel\": \"dev\"" <<<"$out"
+          grep -q "\"commit\": \"${GITHUB_SHA}\"" <<<"$out"
+          grep -q "\"build_id\": \"${GITHUB_RUN_ID}\"" <<<"$out"
+          grep -q "\"builder\": \"github-actions\"" <<<"$out"
+          /tmp/smoke/dtool --version | grep -q "${DEV_VERSION}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dtool-${{ env.DEV_VERSION }}
+          path: dist/dtool_*
+          if-no-files-found: error
+          retention-days: 14

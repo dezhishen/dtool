@@ -1,0 +1,18 @@
+# GitHub 自动生成 PR 说明时使用的分类
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+    authors:
+      - dependabot
+  categories:
+    - title: 新特性
+      labels: [feature, enhancement]
+    - title: 修复
+      labels: [bug, fix]
+    - title: 文档
+      labels: [documentation]
+    - title: 依赖与维护
+      labels: [dependencies, chore]
+    - title: 其他
+      labels: ["*"]

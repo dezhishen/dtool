@@ -1,0 +1,72 @@
+name: Release
+
+# tag 规则：预览版 vX.Y.0-preview.N；正式版 vX.Y.0；补丁版 vX.Y.Z（Z>=1）
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要完整历史与 tag 来生成说明
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: 校验 tag 并计算对比基线
+        id: info
+        run: bash scripts/release-info.sh "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
+
+      - name: 校验 tag 所在分支
+        env:
+          KIND: ${{ steps.info.outputs.kind }}
+        run: |
+          branches="$(git branch -r --contains "$GITHUB_SHA" | sed 's|^ *origin/||')"
+          echo "$branches"
+          if [ "$KIND" = patch ]; then
+            minor="$(echo "$GITHUB_REF_NAME" | sed -E 's/^v([0-9]+\.[0-9]+)\..*/\1/')"
+            echo "$branches" | grep -Eqx "main|release/${minor}" \
+              || { echo "补丁版必须打在 main 或 release/${minor} 上"; exit 1; }
+          else
+            echo "$branches" | grep -qx main \
+              || { echo "预览版/正式版必须打在 main 上"; exit 1; }
+          fi
+
+      - name: 测试
+        run: go test ./...
+
+      - name: 构建产物
+        run: make release-build VERSION="${{ steps.info.outputs.version }}"
+
+      - name: 生成 Release 说明（PR + commits）
+        run: |
+          bash scripts/release-notes.sh "$GITHUB_REF_NAME" "${{ steps.info.outputs.prev }}" "$GITHUB_REPOSITORY" > notes.md
+          cat notes.md
+
+      - name: 创建/更新 Release
+        env:
+          PRERELEASE: ${{ steps.info.outputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease --latest=false); fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md "${flags[@]}"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag "${flags[@]}"
+          fi

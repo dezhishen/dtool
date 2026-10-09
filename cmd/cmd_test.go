@@ -1,0 +1,317 @@
+package cmd
+
+import (
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/wcharczuk/go-chart/v2/roboto"
+	"github.com/xuri/excelize/v2"
+)
+
+// run 以给定参数执行 CLI，返回 stdout、退出错误。
+func run(t *testing.T, args ...string) (map[string]any, error) {
+	t.Helper()
+	oldArgs, oldOut := os.Args, os.Stdout
+	r, w, _ := os.Pipe()
+	os.Args, os.Stdout = append([]string{"dtool"}, args...), w
+	g, cfgFont = globalFlags{}, ""
+	err := Execute("test")
+	w.Close()
+	os.Args, os.Stdout = oldArgs, oldOut
+	out, _ := io.ReadAll(r)
+	var m map[string]any
+	if len(strings.TrimSpace(string(out))) > 0 {
+		if jerr := json.Unmarshal(out, &m); jerr != nil {
+			t.Fatalf("stdout is not JSON: %q", out)
+		}
+	}
+	return m, err
+}
+
+func xlsx(t *testing.T, dir string) string {
+	t.Helper()
+	f := excelize.NewFile()
+	rows := [][]any{{"区域", "销量"}, {"北", 3}, {"南", 5}, {"北", 4}}
+	for i, r := range rows {
+		cell, _ := excelize.CoordinatesToCellName(1, i+1)
+		f.SetSheetRow("Sheet1", cell, &r)
+	}
+	p := filepath.Join(dir, "d.xlsx")
+	if err := f.SaveAs(p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestConfigSelectsWorkspaceAndFont(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	os.WriteFile(filepath.Join(dir, "font.ttf"), roboto.Roboto, 0o644)
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("font: font.ttf\nworkspace: ws/.dtool\npreview_rows: 1\n"), 0o644)
+	data := xlsx(t, dir)
+
+	conv, err := run(t, "-c", "config.yaml", "convert", "--input", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ws", ".dtool", "workspace.json")); err != nil {
+		t.Fatalf("workspace from config not used: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".dtool")); err == nil {
+		t.Fatal("default workspace was created despite config")
+	}
+
+	q, err := run(t, "-c", "config.yaml", "query", "--source", "d=action:"+conv["action_id"].(string),
+		"--sql", `SELECT "区域", SUM("销量") AS total FROM d GROUP BY "区域" ORDER BY "区域"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vz, err := run(t, "-c", "config.yaml", "visualize", "--input", "action:"+q["action_id"].(string),
+		"--type", "bar", "--x", "区域", "--y", "total", "--title", "销量", "--format", "svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, ok := vz["warnings"]; ok {
+		t.Fatalf("font from config should silence the CJK warning: %v", w)
+	}
+	show, err := run(t, "-c", "config.yaml", "actions", "show", vz["action_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	font := show["output"].(map[string]any)["details"].(map[string]any)["font"].(string)
+	if filepath.Base(font) != "font.ttf" {
+		t.Fatalf("recorded font = %q", font)
+	}
+
+	// 命令行 --font 优先于配置文件
+	other := filepath.Join(dir, "other.ttf")
+	os.WriteFile(other, roboto.Roboto, 0o644)
+	vz2, err := run(t, "-c", "config.yaml", "visualize", "--input", "action:"+q["action_id"].(string),
+		"--type", "bar", "--x", "区域", "--y", "total", "--format", "svg", "--font", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	show, _ = run(t, "-c", "config.yaml", "actions", "show", vz2["action_id"].(string))
+	if f := show["output"].(map[string]any)["details"].(map[string]any)["font"].(string); filepath.Base(f) != "other.ttf" {
+		t.Fatalf("--font should win, got %q", f)
+	}
+}
+
+func TestWorkspaceFlagBeatsConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("workspace: from-config\n"), 0o644)
+	if _, err := run(t, "-c", "config.yaml", "--workspace", "from-flag", "actions", "list"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "from-flag", "workspace.json")); err != nil {
+		t.Fatal("--workspace ignored")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "from-config")); err == nil {
+		t.Fatal("config workspace used despite flag")
+	}
+}
+
+func TestConfigErrorsAreStructured(t *testing.T) {
+	t.Chdir(t.TempDir())
+	m, err := run(t, "-c", "missing.yaml", "actions", "list")
+	if err == nil || m["code"].(float64) != 3 {
+		t.Fatalf("missing config: %v %v", m, err)
+	}
+	os.WriteFile("bad.yaml", []byte("nope: 1\n"), 0o644)
+	m, err = run(t, "-c", "bad.yaml", "actions", "list")
+	if err == nil || m["code"].(float64) != 2 {
+		t.Fatalf("bad config: %v %v", m, err)
+	}
+}
+
+func TestUsageAndNotFoundExitCodes(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if m, err := run(t, "convert"); err == nil || m["code"].(float64) != 2 {
+		t.Fatalf("missing flag: %v %v", m, err)
+	}
+	if m, err := run(t, "bogus"); err == nil || m["code"].(float64) != 2 {
+		t.Fatalf("unknown command: %v %v", m, err)
+	}
+	if m, err := run(t, "convert", "--input", "nope.xlsx"); err == nil || m["code"].(float64) != 3 || m["action_id"] == nil {
+		t.Fatalf("missing file: %v %v", m, err)
+	}
+	if m, err := run(t, "actions", "show", "01ARZ3NDEKTSV4RRFFQ69G5FAV"); err == nil || m["code"].(float64) != 3 {
+		t.Fatalf("unknown action: %v %v", m, err)
+	}
+	if m, err := run(t, "query", "--sql", "SELECT 1", "--source", "bad"); err == nil || m["code"].(float64) != 2 {
+		t.Fatalf("bad --source: %v %v", m, err)
+	}
+}
+
+func TestActionsAnnotateTraceExportReindex(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	conv, err := run(t, "convert", "--input", xlsx(t, dir), "--tags", "a, b", "--notes", "n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := conv["action_id"].(string)
+	q, err := run(t, "query", "--from", "action:"+id, "--source", "d=action:"+id, "--sql", "SELECT COUNT(*) AS n FROM d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	qid := q["action_id"].(string)
+
+	if _, err := run(t, "actions", "annotate", qid, "--text", "含税", "--by", "ai-agent"); err != nil {
+		t.Fatal(err)
+	}
+	show, _ := run(t, "actions", "show", qid)
+	ann := show["annotations"].([]any)
+	if len(ann) != 1 || ann[0].(map[string]any)["text"] != "含税" || show["derived_from"] != id {
+		t.Fatalf("show: %v", show)
+	}
+	meta := func() map[string]any { m, _ := run(t, "actions", "show", id); return m["metadata"].(map[string]any) }()
+	if tags := meta["tags"].([]any); len(tags) != 2 || tags[1] != "b" || meta["notes"] != "n" {
+		t.Fatalf("metadata: %v", meta)
+	}
+	tr, _ := run(t, "actions", "trace", id)
+	if len(tr["downstream"].([]any)) != 1 {
+		t.Fatalf("trace: %v", tr)
+	}
+	ex, err := run(t, "actions", "export")
+	if err != nil || ex["count"].(float64) != 2 {
+		t.Fatalf("export: %v %v", ex, err)
+	}
+	os.Remove(filepath.Join(dir, ".dtool", "index.json"))
+	ri, err := run(t, "actions", "reindex")
+	if err != nil || ri["count"].(float64) != 2 {
+		t.Fatalf("reindex: %v %v", ri, err)
+	}
+	ls, _ := run(t, "actions", "list", "--type", "query", "--limit", "5")
+	if ls["total"].(float64) != 1 {
+		t.Fatalf("list: %v", ls)
+	}
+}
+
+func TestNoRecordLeavesNoActions(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	m, err := run(t, "convert", "--input", xlsx(t, dir), "--no-record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, has := m["action_id"]; has && m["action_id"] != "" {
+		t.Fatalf("action_id present with --no-record: %v", m["action_id"])
+	}
+	ls, _ := run(t, "actions", "list")
+	if ls["total"].(float64) != 0 {
+		t.Fatalf("actions recorded: %v", ls)
+	}
+}
+
+func TestDatasetsListShowDeleteAndRef(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := xlsx(t, dir)
+	if _, err := run(t, "convert", "--input", data, "--name", "销量"); err != nil {
+		t.Fatal(err)
+	}
+	conv2, err := run(t, "convert", "--input", data, "--name", "销量")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv2["data_file"] != ".dtool/datasets/销量/data.json" || conv2["schema_file"] != ".dtool/datasets/销量/data.schema.json" || conv2["updated_at"] == nil {
+		t.Fatalf("convert: %v", conv2)
+	}
+
+	ls, err := run(t, "datasets", "list")
+	if err != nil || ls["total"].(float64) != 1 {
+		t.Fatalf("list: %v %v", ls, err)
+	}
+	d := ls["datasets"].([]any)[0].(map[string]any)
+	if d["name"] != "销量" || d["version"] != nil || d["updated_at"] == nil || d["record_count"].(float64) != 3 || d["action_id"] != conv2["action_id"] {
+		t.Fatalf("dataset: %v", d)
+	}
+
+	show, err := run(t, "datasets", "show", "销量")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sch := show["schema"].(map[string]any)
+	cols := sch["columns"].([]any)
+	if sch["updated_at"] != d["updated_at"] || sch["generated_at"] != nil {
+		t.Fatalf("schema updated_at %v != dataset %v", sch["updated_at"], d["updated_at"])
+	}
+	if len(cols) != 2 || len(show["preview"].([]any)) != 3 {
+		t.Fatalf("show: %v", show)
+	}
+
+	// 数据集名直接作表名，也可用 dataset: 引用
+	q, err := run(t, "query", "--sql", `SELECT SUM("销量") AS total FROM "销量"`)
+	if err != nil || q["rows"].([]any)[0].(map[string]any)["total"].(float64) != 12 {
+		t.Fatalf("query by dataset name: %v %v", q, err)
+	}
+	q, err = run(t, "query", "--source", "s=dataset:销量", "--sql", `SELECT COUNT(*) AS n FROM s`)
+	if err != nil || q["rows"].([]any)[0].(map[string]any)["n"].(float64) != 3 {
+		t.Fatalf("query via ref: %v %v", q, err)
+	}
+
+	if m, err := run(t, "datasets", "show", "nope"); err == nil || m["code"].(float64) != 3 {
+		t.Fatalf("unknown dataset: %v %v", m, err)
+	}
+	if _, err := run(t, "datasets", "delete", "销量"); err != nil {
+		t.Fatal(err)
+	}
+	if ls, _ := run(t, "datasets", "list"); ls["total"].(float64) != 0 {
+		t.Fatalf("after delete: %v", ls)
+	}
+	if m, err := run(t, "datasets", "delete", "销量"); err == nil || m["code"].(float64) != 3 {
+		t.Fatalf("double delete: %v %v", m, err)
+	}
+}
+
+func TestUpdateFlagsValidateBeforeAnyNetworkAccess(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cases := [][]string{
+		{"--pre"}, // --pre 必须配合 --update
+		{"upgrade", "--version", "not-a-version"},  // 版本号格式错误
+		{"upgrade", "--version", "1.0.0", "--pre"}, // 二者互斥
+		{"upgrade", "extra"},                       // 不接受位置参数
+	}
+	for _, args := range cases {
+		m, err := run(t, args...)
+		if err == nil || m["code"].(float64) != 2 {
+			t.Errorf("%v: %v %v", args, m, err)
+		}
+	}
+}
+
+func TestVersionCommandAndFlag(t *testing.T) {
+	t.Chdir(t.TempDir())
+	m, err := run(t, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// run() 以 Execute("test") 运行：版本被覆盖为 test，其余元数据来自构建信息
+	if m["version"] != "test" || m["channel"] != "local" {
+		t.Fatalf("version/channel: %v", m)
+	}
+	for _, k := range []string{"commit", "commit_date", "branch", "dirty", "build_date", "build_id", "build_url", "builder",
+		"repo", "go", "compiler", "cgo", "os", "arch"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing field %q in %v", k, m)
+		}
+	}
+	if m["builder"] != "local" || m["go"] == "" || m["os"] == "" {
+		t.Errorf("%v", m)
+	}
+	if _, has := m["deps"]; has {
+		t.Error("deps must be opt-in")
+	}
+	if m, err = run(t, "version", "--deps"); err != nil || m["deps"] == nil && m["go"] == "" {
+		t.Errorf("--deps: %v %v", m, err)
+	}
+	if _, err := run(t, "version", "extra"); err == nil {
+		t.Error("positional args accepted")
+	}
+}
