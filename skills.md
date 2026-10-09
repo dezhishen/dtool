@@ -127,6 +127,7 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 
 | 用户说 | 做法 |
 |--------|------|
+| 直接描述目标与产物（"按区域汇总 `sales.xlsx` 并出柱状图，再给我 Top 5 客户 Excel"） | 别反问命令细节：`convert` 成数据集 → `datasets show` 确认列名 → `query` → `visualize --input latest:query` / `--format xlsx --output`，最后把产物路径报回去 |
 | "进度怎么样 / 刚才做了什么" | `actions list --limit 5`，用 `summary` 回答 |
 | "为什么失败了" | `actions list --status failed --limit 1` → `actions show <id>`，读 `error`（含 `detail`/`hint`）；字段缺失时 `detail` 会列出可用列 |
 | "用上次的结果画图/导出" | `visualize --input latest:query ...`，不要重跑查询 |

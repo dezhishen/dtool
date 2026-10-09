@@ -99,15 +99,17 @@ bash examples/01-sales-report/run.sh       # 只跑单个
 不知道从哪下手时，从自己的职业看起：[docs/scenarios/](docs/scenarios/README.md) 每个职业一份文档，
 从「一条 SQL 拿到答案」递进到「连表 + 出图 + 导出 + 留痕」，命令都能对着示例数据直接跑。
 
-| 场景 | 典型问题 |
-|------|----------|
-| [销售 / 业务运营](docs/scenarios/sales.md) | 各区卖了多少？哪些客户在贡献增长？ |
-| [财务 / 会计](docs/scenarios/finance.md) | 收入口径对不对？有没有对不上的账？ |
-| [HR / 人事](docs/scenarios/hr.md) | 各部门薪酬结构？谁是待评估新人？ |
-| [电商 / 仓储运营](docs/scenarios/ecommerce.md) | 哪些 SKU 是爆款？退款率、复购如何？ |
-| [市场 / 增长](docs/scenarios/marketing.md) | 增长从哪来？环比、新客、客单价？ |
-| [管理者 / 汇报](docs/scenarios/management.md) | 5 分钟给出一页图表，还要说得清来源 |
-| [数据 / BI](docs/scenarios/analyst.md) | 手上是 JSON、大文件、脏数据怎么查？ |
+表里的「对 AI 说」一列可以直接当成给 Copilot / 其他 Agent 的提示词（把文件名换成你自己的即可）：
+
+| 场景 | 典型问题 | 对 AI 说（示例） |
+|------|----------|------------------|
+| [销售 / 业务运营](docs/scenarios/sales.md) | 各区卖了多少？哪些客户在贡献增长？ | 按区域汇总 `sales.xlsx` 的订单销售额并出柱状图，再给我金额 Top 5 客户的 Excel |
+| [财务 / 会计](docs/scenarios/finance.md) | 收入口径对不对？有没有对不上的账？ | 核对 `sales.xlsx` 的金额是否等于单价 × 数量，列出退款明细导出 CSV，再出月度净收入对账表 |
+| [HR / 人事](docs/scenarios/hr.md) | 各部门薪酬结构？谁是待评估新人？ | 汇总 `hr.xlsx` 各部门人数与平均月薪出饼图，并导出绩效为空的人员名单 |
+| [电商 / 仓储运营](docs/scenarios/ecommerce.md) | 哪些 SKU 是爆款？退款率、复购如何？ | 统计 `sales.xlsx` 各产品销量与退款率，再找出各区域销量前二的品类 |
+| [市场 / 增长](docs/scenarios/marketing.md) | 增长从哪来？环比、新客、客单价？ | 看 `sales.xlsx` 的月度销售额趋势与环比，再统计新客首单月份和城市分布，各出一张图 |
+| [管理者 / 汇报](docs/scenarios/management.md) | 5 分钟给出一页图表，还要说得清来源 | 用 `pipeline` 把 `sales.xlsx` 一条命令出成月度折线图并标注口径，之后我要能追溯它是怎么算出来的 |
+| [数据 / BI](docs/scenarios/analyst.md) | 手上是 JSON、大文件、脏数据怎么查？ | 把这个 1.5GB 的 JSON 用省内存的方式读进来查某列分布并导出 CSV；若是脏 Excel，先告诉我自动改了哪些 |
 
 ## 装入方式与大数据量
 
