@@ -5,7 +5,7 @@ PLATFORMS := linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 win
 # 版本与元数据（commit/分支/构建时间/CI 运行…）由 scripts/ldflags.sh 统一生成
 LDFLAGS   := $(shell bash scripts/ldflags.sh $(VER))
 
-.PHONY: build build-all release-build test vet fmt check notices examples examples-data clean help $(addprefix build-,$(PLATFORMS))
+.PHONY: build build-all release-build test vet fmt check bench notices examples examples-data clean help $(addprefix build-,$(PLATFORMS))
 
 help:
 	@echo "build               当前平台"
@@ -13,6 +13,7 @@ help:
 	@echo "build-all           全部平台二进制 -> dist/bin/"
 	@echo "release-build       全部平台打包(tar.gz/zip) + checksums.txt -> dist/"
 	@echo "check               gofmt + vet + test + 脚本语法"
+	@echo "bench               性能基准（JSON 装入 / Excel 转换）"
 	@echo "examples            构建并运行全部示例（examples/）"
 	@echo "examples-data       重新生成示例数据源"
 	@echo "notices             生成 THIRD_PARTY_NOTICES.md（release-build 会自动生成）"
@@ -35,6 +36,11 @@ release-build:
 
 test:
 	go test ./...
+
+# 性能基准：默认 JSON 2 万行、xlsx 1 万行；DTOOL_BENCH_ROWS=N 可放大。
+# 内存倍率的回归断言在 go test ./... 里（TestPerf*），这里只跑吞吐。
+bench:
+	go test -run '^$$' -bench . -benchmem ./internal/query/ ./internal/pipeline/
 
 vet:
 	go vet ./...

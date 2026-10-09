@@ -84,6 +84,23 @@ dtool query --timeout 10m      --sql '...'    # 查询本身很重时再调大�
 
 大表建议先拆成多个 xlsx 分别导入，或先转成 JSON 再用 `dtool query`（走 `--load-mode stream`，峰值降到 ×2）。
 
+### 性能回归测试
+
+上表的结论不只写在文档里，也在测试里，随 `go test ./...` 一起跑（`-short` 跳过）：
+
+| 用例 | 断言 |
+|------|------|
+| `TestPerfLoadModeMemoryRatio` | 流式装入的峰值堆须比整块解析低 1.3 倍以上（实测 2.3–3.7 倍） |
+| `TestPerfConvertExcelMemory` | Excel 转换的峰值堆不得超过预检倍率 `×260 × 1.3`，防止「实际变差而预检没跟上」导致静默 OOM |
+
+吞吐用基准看，需要显式开启：
+
+```bash
+make bench                            # JSON 2 万行 / xlsx 1 万行
+DTOOL_BENCH_ROWS=200000 make bench    # 放大：JSON 20 万行 / xlsx 20 万行
+go test ./internal/query -bench LoadStream -benchmem   # 只看某一项
+```
+
 ## 内存不足时的行为
 
 为避免「进程被内核静默杀掉、用户不知道发生了什么」，dtool 会：
