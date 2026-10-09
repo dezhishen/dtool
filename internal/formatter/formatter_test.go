@@ -118,6 +118,26 @@ func TestXLSX(t *testing.T) {
 	}
 }
 
+func TestXLSXMetadataIsDtoolNotLibraryDefaults(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, "xlsx", sample()); err != nil {
+		t.Fatal(err)
+	}
+	f, err := excelize.OpenReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	doc, _ := f.GetDocProps()
+	app, _ := f.GetAppProps()
+	if doc.Creator != "dtool" || doc.LastModifiedBy != "dtool" || app.Application != "dtool" {
+		t.Fatalf("doc=%+v app=%+v", doc, app)
+	}
+	if strings.HasPrefix(doc.Created, "2006") || strings.HasPrefix(doc.Modified, "2006") {
+		t.Fatalf("library default timestamps leaked: %+v", doc)
+	}
+}
+
 func TestXLSXEmptyResult(t *testing.T) {
 	r := &types.QueryResult{Columns: []string{"a", "b"}, Rows: []types.Row{}}
 	var buf bytes.Buffer

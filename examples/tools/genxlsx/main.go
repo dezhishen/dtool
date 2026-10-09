@@ -29,6 +29,10 @@ func main() {
 	}{{"sales.xlsx", sales}, {"hr.xlsx", hr}, {"messy.xlsx", messy}} {
 		name, gen := g.name, g.gen
 		f := gen(r)
+		// 固定时间戳保证可复现，并避免写入库默认的作者信息
+		_ = f.SetDocProps(&excelize.DocProperties{Creator: "dtool examples", LastModifiedBy: "dtool examples",
+			Created: "2026-01-01T00:00:00Z", Modified: "2026-01-01T00:00:00Z"})
+		_ = f.SetAppProps(&excelize.AppProperties{Application: "dtool examples"})
 		p := filepath.Join(dir, name)
 		if err := f.SaveAs(p); err != nil {
 			log.Fatal(err)

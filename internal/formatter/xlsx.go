@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"strconv"
+	"time"
 	"unicode"
 
 	"github.com/dezhishen/dtool/pkg/types"
@@ -56,6 +57,10 @@ func writeXLSX(w io.Writer, r *types.QueryResult) error {
 	}
 	f := excelize.NewFile()
 	defer f.Close()
+	// 覆盖 excelize 默认写入的作者 "xuri"、2006 年时间戳与应用名
+	ts := time.Now().UTC().Format(time.RFC3339)
+	_ = f.SetDocProps(&excelize.DocProperties{Creator: "dtool", LastModifiedBy: "dtool", Created: ts, Modified: ts})
+	_ = f.SetAppProps(&excelize.AppProperties{Application: "dtool"})
 
 	hdr := make([]any, len(r.Columns))
 	widths := make([]int, len(r.Columns))
