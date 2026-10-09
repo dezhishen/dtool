@@ -16,6 +16,8 @@ dtool convert --input sales.xlsx --sheet 客户 --name customers
 
 ## ★ 月度趋势：一条 SQL + 一张折线图
 
+**对 AI 说**：「按月看销售额趋势并出折线图」
+
 ```bash
 dtool query --sql "SELECT strftime('%Y-%m', 日期) AS 月份, COUNT(*) AS 单数,
     ROUND(SUM(金额),2) AS 销售额
@@ -34,6 +36,8 @@ dtool visualize --input latest:query --type line --x 月份 --y 销售额 \
 
 ## ★ 客户结构：城市 × 等级
 
+**对 AI 说**：「按城市和等级看客户数和销售额」
+
 ```bash
 dtool query --sql "SELECT c.城市, c.等级, COUNT(DISTINCT o.客户ID) AS 客户数,
     ROUND(SUM(o.金额),2) AS 销售额
@@ -44,6 +48,8 @@ dtool query --sql "SELECT c.城市, c.等级, COUNT(DISTINCT o.客户ID) AS 客�
 `COUNT(DISTINCT 客户ID)` 去重计数，避免一个客户被重复算成多个。
 
 ## ★★ 环比增长（`LAG` 窗口函数）
+
+**对 AI 说**：「算一下销售额的月度环比增长」
 
 ```bash
 dtool query --sql "WITH m AS (SELECT strftime('%Y-%m', 日期) AS 月份,
@@ -57,6 +63,8 @@ dtool query --sql "WITH m AS (SELECT strftime('%Y-%m', 日期) AS 月份,
 第一个月没有上月，`上月` / `环比` 为 `NULL`，属正常。想看同比就按月份再关联一份去年数据。
 
 ## ★★ 等级 × 客单价
+
+**对 AI 说**：「各等级客户的客单价是多少」
 
 ```bash
 dtool query --sql "SELECT c.等级, COUNT(DISTINCT o.客户ID) AS 客户数, COUNT(*) AS 单数,
@@ -74,6 +82,8 @@ dtool query --sql "SELECT c.等级, COUNT(DISTINCT o.客户ID) AS 客户数, COU
 示例数据里金牌客单价反而最低 —— 这类「反直觉」正是分析要回答的问题（金牌客户在冲量、还是品类结构不同？）。
 
 ## ★★★ 新客获取节奏 + 城市分布图
+
+**对 AI 说**：「新客获取的月度节奏和客户城市分布，各出一张图」
 
 ```bash
 # 每位客户的首单月份 -> 每月新增客户数

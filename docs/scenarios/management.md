@@ -14,6 +14,8 @@ cp /path/to/dtool/examples/data/sales.xlsx .
 
 ## ★ 一条命令：Excel → 图
 
+**对 AI 说**：「用 sales.xlsx 一条命令出各区域销售额柱状图」
+
 ```bash
 dtool pipeline --excel sales.xlsx --sheet 订单 --name orders \
   --sql "SELECT 区域, ROUND(SUM(金额),2) AS 销售额 FROM data GROUP BY 1 ORDER BY 销售额 DESC" \
@@ -27,6 +29,8 @@ dtool pipeline --excel sales.xlsx --sheet 订单 --name orders \
 
 ## ★ 先把数据存好，之后反复用
 
+**对 AI 说**：「先把订单数据导入留着，之后我要反复查」
+
 ```bash
 dtool pipeline --excel sales.xlsx --sheet 订单 --name orders   # 不带 --sql = 只转换
 dtool datasets list
@@ -37,6 +41,8 @@ dtool datasets show orders
 
 ## ★★ 复用已持久化的数据出图
 
+**对 AI 说**：「用刚才那个数据集出月度折线图」
+
 ```bash
 dtool pipeline --input dataset:orders \
   --sql "SELECT strftime('%Y-%m', 日期) AS 月份, ROUND(SUM(金额),2) AS 销售额 FROM data GROUP BY 1 ORDER BY 1" \
@@ -46,6 +52,8 @@ dtool pipeline --input dataset:orders \
 `--input` 支持 `文件` / `dataset:<名>` / `action:<id>` / `latest:convert`；内部 SQL 同样用 `data`。
 
 ## ★★ 给结论配一张表（Markdown / Excel）
+
+**对 AI 说**：「把状态汇总导成 Excel，再给我一份 Markdown」
 
 ```bash
 dtool query --format markdown --sql "SELECT 状态, COUNT(*) AS 单数, ROUND(SUM(金额),2) AS 金额
@@ -63,6 +71,8 @@ dtool visualize --input latest:query --type table --format md   --output 状态�
 ```
 
 ## ★★★ 追问「这张图的数字是怎么来的？」
+
+**对 AI 说**：「这张图的数字怎么来的？给我完整链路和口径」
 
 ```bash
 dtool query --tags 月报,汇报 --notes "口径：含已退款" --sql "SELECT 区域,

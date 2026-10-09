@@ -16,6 +16,8 @@ dtool convert --input sales.xlsx --sheet 客户 --name customers
 
 ## ★ 口径核对：按状态汇总
 
+**对 AI 说**：「按状态汇总订单数和金额，我要看退款规模」
+
 ```bash
 dtool query --sql "SELECT 状态, COUNT(*) AS 单数, ROUND(SUM(金额),2) AS 金额
   FROM orders GROUP BY 1 ORDER BY 金额 DESC"
@@ -31,12 +33,16 @@ dtool query --sql "SELECT 状态, COUNT(*) AS 单数, ROUND(SUM(金额),2) AS �
 
 ## ★ 挑出退款明细（导 CSV 给审计）
 
+**对 AI 说**：「把退款订单的明细导成 CSV 给审计」
+
 ```bash
 dtool query --format csv --output 退款明细.csv --sql "SELECT 订单号, 日期, 客户ID, 产品, 金额
   FROM orders WHERE 状态 = '已退款' ORDER BY 金额 DESC"
 ```
 
 ## ★★ 月度确认收入与退款（`CASE WHEN` 分列）
+
+**对 AI 说**：「按月拆出确认收入和退款金额」
 
 ```bash
 dtool query --sql "SELECT strftime('%Y-%m', 日期) AS 月份,
@@ -47,6 +53,8 @@ dtool query --sql "SELECT strftime('%Y-%m', 日期) AS 月份,
 
 ## ★★ 账实核对：单价 × 数量 = 金额？
 
+**对 AI 说**：「查一下金额不等于单价乘数量的订单」
+
 ```bash
 dtool query --sql "SELECT 订单号, 数量, 单价, 金额, ROUND(单价*数量,2) AS 应有金额
   FROM orders WHERE ABS(单价*数量 - 金额) > 0.01"
@@ -55,6 +63,8 @@ dtool query --sql "SELECT 订单号, 数量, 单价, 金额, ROUND(单价*数量
 返回 `row_count: 0` 就是账平。用 SQL 找异常行是财务最常用的姿势，换成「汇率错误」「税费不符」同理。
 
 ## ★★ 退款率按产品
+
+**对 AI 说**：「按产品算退款率，高的排前面」
 
 ```bash
 dtool query --sql "SELECT 产品, COUNT(*) AS 单数,
@@ -69,6 +79,8 @@ dtool query --sql "SELECT 产品, COUNT(*) AS 单数,
 
 ## ★★★ 交叉核对两张表：订单里的客户在档案里吗？
 
+**对 AI 说**：「订单里的客户在客户档案里都有吗？没有的列出来」
+
 ```bash
 dtool query --sql "SELECT DISTINCT o.客户ID
   FROM orders o LEFT JOIN customers c ON o.客户ID = c.客户ID
@@ -79,6 +91,8 @@ dtool query --sql "SELECT DISTINCT o.客户ID
 没结果（`row_count: 0`）说明两边对得上。同一招可以查「有订单无回款」「有发票无合同」。
 
 ## ★★★ 一键出对账表（查询 → Excel）
+
+**对 AI 说**：「出一个月度对账表并导出 Excel」
 
 ```bash
 dtool query --format xlsx --output 对账表.xlsx --sql "SELECT strftime('%Y-%m', 日期) AS 月份,

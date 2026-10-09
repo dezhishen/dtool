@@ -53,6 +53,21 @@ dtool 面向 Agent 设计：你只描述**目标和产物**，不必指定命令
 - **反复迭代的写法**：「刚才那张图按季度再拆一下」→ Agent 会用 `--from action:<id>` 记录血缘，
   数据源改用 `dataset:` 而不重跑转换。
 
+一次完整对话大概长这样（你只说目标，Agent 负责命令）：
+
+```text
+你  ｜ 用 sales.xlsx 的订单表按区域汇总销售额，出个柱状图。
+AI  ｜ 已转换数据集 orders → 确认列名（区域/金额）→ 查询 → 出图
+     ｜ 产物：region.png（Action 01M4…）
+你  ｜ 再接上客户档案，给我金额 Top 5 客户的 Excel。
+AI  ｜ JOIN customers → 导出 top_customers.xlsx（Action 01M4…）
+你  ｜ 这张图的数字怎么来的？
+AI  ｜ convert sales.xlsx → query（SQL 见下）→ visualize，口径「不含已退款」
+```
+
+Agent 侧的行为约定（先 `datasets show` 再写 SQL、默认只读 preview、失败先自查 Action）见
+[skills.md](../../skills.md)。
+
 ## 四条通用规则
 
 1. **中文列名可以直接写**：`SELECT 区域, SUM(金额) FROM orders GROUP BY 1`。

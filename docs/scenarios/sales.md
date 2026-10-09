@@ -16,6 +16,8 @@ dtool convert --input sales.xlsx --sheet 客户 --name customers
 
 ## ★ 入门：一张表看清各区域业绩
 
+**对 AI 说**：「把 sales.xlsx 的订单按区域汇总单数和金额」
+
 **要解决的问题**：这个季度哪个区域卖得最好？
 
 ```bash
@@ -36,6 +38,8 @@ dtool query --sql "SELECT 区域, COUNT(*) AS 单数, ROUND(SUM(金额),2) AS �
 
 ## ★ 入门：把结果变成柱状图
 
+**对 AI 说**：「把这个结果画成柱状图，标题「各区域销售额」」
+
 ```bash
 dtool visualize --input latest:query --type bar --x 区域 --y 销售额 \
   --title "各区域销售额" --output 区域销售额.png
@@ -45,6 +49,8 @@ dtool visualize --input latest:query --type bar --x 区域 --y 销售额 \
 `dtool actions list` 拿到 action id，再用 `--input action:<id>`。中文标题会自动挑系统中文字体。
 
 ## ★★ 进阶：把客户档案接进来（JOIN）
+
+**对 AI 说**：「接上客户档案，按消费金额排 Top 10 客户」
 
 ```bash
 dtool query --sql "SELECT c.客户名称, c.等级, c.城市, COUNT(*) AS 单数,
@@ -67,6 +73,8 @@ dtool query --sql "SELECT c.客户名称, c.等级, c.城市, COUNT(*) AS 单数
 
 ## ★★ 进阶：导出 Excel 交给业务方
 
+**对 AI 说**：「导成 Excel，我要发给业务方」
+
 ```bash
 dtool query --format xlsx --output 客户销售.xlsx --sql "SELECT c.客户名称, c.等级,
     COUNT(*) AS 单数, ROUND(SUM(o.金额),2) AS 总额
@@ -77,6 +85,8 @@ dtool query --format xlsx --output 客户销售.xlsx --sql "SELECT c.客户名�
 `--format` 还支持 `csv` / `markdown` / `table`；不写 `--output` 时打印到终端。
 
 ## ★★★ 综合：客户贡献占比（CTE + 子查询）
+
+**对 AI 说**：「算一下 Top 5 客户占总额的比例」
 
 ```bash
 dtool query --sql "WITH cust AS (
@@ -90,6 +100,8 @@ dtool query --sql "WITH cust AS (
 **单条 `SELECT`/`WITH`**。
 
 ## ★★★ 综合：月度趋势 + 留痕
+
+**对 AI 说**：「按月看销售额趋势出折线图，这次分析标成「月报」」
 
 ```bash
 dtool query --tags 月报,销售 --notes "月度复盘：各区域销售额" --sql "SELECT

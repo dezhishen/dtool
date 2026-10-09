@@ -16,6 +16,8 @@ dtool convert --input sales.xlsx --sheet 客户 --name customers
 
 ## ★ SKU 销量排行
 
+**对 AI 说**：「按产品算销量和销售额，销量高的排前面」
+
 ```bash
 dtool query --sql "SELECT 产品, SUM(数量) AS 销量, ROUND(SUM(金额),2) AS 销售额
   FROM orders GROUP BY 1 ORDER BY 销量 DESC"
@@ -31,6 +33,8 @@ dtool query --sql "SELECT 产品, SUM(数量) AS 销量, ROUND(SUM(金额),2) AS
 
 ## ★ 区域 × 品类 交叉表
 
+**对 AI 说**：「按区域看每个品类的销量，做成交叉表」
+
 ```bash
 dtool query --sql "SELECT 区域,
     SUM(CASE WHEN 产品 = '笔记本' THEN 数量 END) AS 笔记本,
@@ -45,6 +49,8 @@ dtool query --sql "SELECT 区域,
 
 ## ★★ 各产品退款率
 
+**对 AI 说**：「按产品算退款率，标出高的」
+
 ```bash
 dtool query --sql "SELECT 产品, COUNT(*) AS 单数,
     ROUND(100.0*SUM(CASE WHEN 状态 = '已退款' THEN 1 ELSE 0 END)/COUNT(*),1) AS 退款率
@@ -58,12 +64,16 @@ dtool query --sql "SELECT 产品, COUNT(*) AS 单数,
 
 ## ★★ 新客首单月份（CTE + MIN）
 
+**对 AI 说**：「每个月有多少新客（按每人首单日期算）」
+
 ```bash
 dtool query --sql "WITH t AS (SELECT 客户ID, MIN(日期) AS 首单日期 FROM orders GROUP BY 1)
   SELECT strftime('%Y-%m', 首单日期) AS 月份, COUNT(*) AS 新客数 FROM t GROUP BY 1 ORDER BY 1"
 ```
 
 ## ★★★ 复购结构：一次性 vs 复购
+
+**对 AI 说**：「客户里一次性购买和复购各多少，平均消费差别多大」
 
 ```bash
 dtool query --sql "SELECT CASE WHEN 单数 >= 2 THEN '复购客户' ELSE '一次性客户' END AS 类型,
@@ -75,6 +85,8 @@ dtool query --sql "SELECT CASE WHEN 单数 >= 2 THEN '复购客户' ELSE '一次
 先按客户聚合，再对聚合结果分组 —— 「先明细后汇总」是运营分析的常见两层结构。
 
 ## ★★★ 每个区域的 TOP2 品类
+
+**对 AI 说**：「每个区域销量前二的品类」
 
 ```bash
 dtool query --sql "SELECT 区域, 产品, 销量 FROM (

@@ -19,6 +19,8 @@ dtool datasets show hr
 
 ## ★ 各部门人数与薪酬
 
+**对 AI 说**：「按部门统计人数、平均月薪和最高月薪」
+
 ```bash
 dtool query --sql "SELECT 部门, COUNT(*) AS 人数, ROUND(AVG(月薪),0) AS 平均月薪, MAX(月薪) AS 最高月薪
   FROM hr GROUP BY 1 ORDER BY 平均月薪 DESC"
@@ -32,6 +34,8 @@ dtool query --sql "SELECT 部门, COUNT(*) AS 人数, ROUND(AVG(月薪),0) AS �
 
 ## ★ 工号是文本，前导零不会丢
 
+**对 AI 说**：「把工号 00101 到 00105 的人筛出来」
+
 ```bash
 dtool query --sql "SELECT 工号, 姓名, 部门 FROM hr WHERE 工号 BETWEEN '00101' AND '00105' ORDER BY 工号"
 ```
@@ -39,6 +43,8 @@ dtool query --sql "SELECT 工号, 姓名, 部门 FROM hr WHERE 工号 BETWEEN '0
 `00101` 这类值在导入时被整列识别为**字符串**，不会被压成 `101`，所以按字典序比较、按前缀筛选都正常。
 
 ## ★★ 找待评估人员（绩效为空 = 当年新人）
+
+**对 AI 说**：「找出绩效为空的人，导成 Excel 名单」
 
 ```bash
 dtool query --format xlsx --output 待评估名单.xlsx --sql "SELECT 工号, 姓名, 部门, 入职日期
@@ -48,6 +54,8 @@ dtool query --format xlsx --output 待评估名单.xlsx --sql "SELECT 工号, �
 绩效列在 2026 年入职者上是空的。空值必须用 `IS NULL` 判断，`= NULL` 永远不成立。
 
 ## ★★ 职级分布饼图
+
+**对 AI 说**：「按职级统计人数并出饼图」
 
 ```bash
 dtool query --sql "SELECT 职级, COUNT(*) AS 人数 FROM hr GROUP BY 1 ORDER BY 职级"
@@ -61,6 +69,8 @@ dtool visualize --input latest:query --type pie --x 职级 --y 人数 \
 
 ## ★★★ 部门 × 职级 交叉表（透视）
 
+**对 AI 说**：「按部门看高/中/初级各多少人，做成一张表」
+
 ```bash
 dtool query --format markdown --sql "SELECT 部门,
     SUM(CASE WHEN 职级 IN ('P6','P7') THEN 1 ELSE 0 END) AS 高级,
@@ -72,6 +82,8 @@ dtool query --format markdown --sql "SELECT 部门,
 用 `CASE WHEN` + `SUM` 把「行」转成「列」，是 SQL 里做透视表的通用做法，行数固定时很实用。
 
 ## ★★★ 各部门薪酬 TOP2（窗口函数）
+
+**对 AI 说**：「每个部门月薪最高的两个人是谁」
 
 ```bash
 dtool query --sql "SELECT 部门, 姓名, 月薪 FROM (

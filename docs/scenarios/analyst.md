@@ -17,6 +17,8 @@ dtool convert --input messy.xlsx --sheet 原始数据 --name messy
 
 ## ★ 把任意 JSON 直接当表查
 
+**对 AI 说**：「直接把这个 JSON 当表查一下行数」
+
 ```bash
 dtool query --source j=.dtool/datasets/orders/data.json \
   --sql "SELECT COUNT(*) AS 行数 FROM j"
@@ -38,6 +40,8 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 表头修正与类型推断），之后就当成普通表用。
 
 ## ★★ 内存可控
+
+**对 AI 说**：「这个文件用省内存的方式读，别把机器撑爆」
 
 ```bash
 dtool --load-mode stream query --sql "SELECT COUNT(*) AS 行数 FROM orders"  # 流式，省内存
@@ -64,6 +68,8 @@ dtool --max-memory 32K query --sql "SELECT COUNT(*) AS 行数 FROM orders"
 
 ## ★★ 沙箱：危险 SQL 会被拦
 
+**对 AI 说**：「试试写操作会不会被拦住」
+
 ```bash
 dtool query --sql "SELECT 1; DROP TABLE orders"
 # {"error":"sandbox violation: multiple statements are not allowed","code":4}
@@ -76,6 +82,8 @@ dtool query --sql "DELETE FROM orders"
 `--sandbox=false`，风险自负。
 
 ## ★★ 脏数据体检
+
+**对 AI 说**：「这个脏 Excel 自动改了哪些？金额里的 N/A 该怎么处理」
 
 ```bash
 dtool convert --input messy.xlsx --sheet 原始数据 --name messy
@@ -106,6 +114,8 @@ dtool query --sql "SELECT 编号, 名称,
 ```
 
 ## ★★★ 多格式投递
+
+**对 AI 说**：「同一份结果分别给我 markdown 和 CSV」
 
 ```bash
 dtool query --format markdown --sql "SELECT ..."                        # 贴 PR / 文档
