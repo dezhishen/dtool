@@ -196,7 +196,9 @@ func TestUpgradeReplacesBinaryAndKeepsMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Upgraded || res.From != "1.0.0" || res.To != "1.1.0" || res.Path != u.Exe {
+	// 升级会解析符号链接/短路径（macOS /var→/private/var，Windows 8.3 短名），比较解析后的路径
+	wantPath, _ := filepath.EvalSymlinks(u.Exe)
+	if !res.Upgraded || res.From != "1.0.0" || res.To != "1.1.0" || res.Path != wantPath {
 		t.Fatalf("res = %+v", res)
 	}
 	if read(t, u.Exe) != "NEW-1.1.0" || verified != "1.1.0:NEW-1.1.0" {
