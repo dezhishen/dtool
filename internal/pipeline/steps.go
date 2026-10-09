@@ -34,8 +34,15 @@ type Env struct {
 	LoadMode string
 }
 
-// xlsxPeakFactor：xlsx 经压缩，解析成数据集的内存约为文件大小的 260 倍（实测）。
-const xlsxPeakFactor = 260
+// Excel 转换的内存预估（流式转换后实测：13KB→18.5MB、7.4MB→47MB、17.8MB→76MB，
+// 即固定开销 + 文件 × ~3.2）。预检取 ~1.7 倍余量，避免低估导致用户被内核 OOM 杀掉。
+const (
+	xlsxBaseOverhead = 32 << 20 // 运行时与 excelize 的固定开销
+	xlsxPeakFactor   = 6        // 每 MB 输入的内存系数
+)
+
+// xlsxNeed 返回 Excel 转换的预估峰值内存；预检与性能回归测试共用同一口径。
+func xlsxNeed(size uint64) uint64 { return xlsxBaseOverhead + size*xlsxPeakFactor }
 
 // run 负责 Action 的 Start/Success/Fail 生命周期与产物目录。
 func (e *Env) run(typ string, input map[string]any, parent, derived string,
@@ -106,22 +113,26 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 			// 放进回调内，内存不足时同样留下一条 failed 的 Action，便于事后排查
 			size := memguard.SizeOf(p.Input)
 			mem := memguard.Budget(e.MaxMemory)
-			if err := memguard.CheckSize("Excel 文件", size, xlsxPeakFactor, mem, memguard.HintSplitInput); err != nil {
+			need := xlsxNeed(size)
+			if err := memguard.CheckNeed("Excel 文件", size, need,
+				fmt.Sprintf("%.0fMB 固定开销 + 文件 × %d 的流式估算", float64(xlsxBaseOverhead)/(1<<20), xlsxPeakFactor),
+				mem, memguard.HintSplitInput); err != nil {
 				return nil, err
 			}
-			memguard.Progress(os.Stderr, memguard.DefaultProgressMinSize, filepath.Base(p.Input), size, size*xlsxPeakFactor, "解析 xlsx")
+			memguard.Progress(os.Stderr, memguard.DefaultProgressMinSize, filepath.Base(p.Input), size, need, "流式解析 xlsx")
 			stage, err := ds.NewStaging()
 			if err != nil {
 				return nil, err
 			}
 			defer os.RemoveAll(stage)
 			now := time.Now().UTC().Truncate(time.Second) // 与 Schema 中的秒级 updated_at 保持一致
-			r, err := converter.ConvertExcel(converter.Options{Input: p.Input, Sheet: p.Sheet, OutDir: stage, UpdatedAt: now})
+			r, err := converter.ConvertExcel(converter.Options{Input: p.Input, Sheet: p.Sheet, OutDir: stage,
+				UpdatedAt: now, PreviewRows: e.Preview})
 			if err != nil {
 				return nil, err
 			}
 			m, err := ds.Commit(stage, dataset.Meta{Name: name, ActionID: id, Source: p.Input, Sheet: r.Sheet, UpdatedAt: now,
-				RecordCount: len(r.Rows), Columns: r.Columns})
+				RecordCount: r.RecordCount, Columns: r.Columns})
 			if err != nil {
 				return nil, err
 			}
@@ -129,17 +140,19 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 			if err != nil {
 				return nil, err
 			}
-			prev, trunc := action.Preview(r.Rows, e.Preview)
+			// 预览由转换阶段顺带留下（流式转换不再持有全部记录），
+			// 是否截断只能按总记录数判断。
+			prev, trunc := r.Preview, r.RecordCount > len(r.Preview)
 			out := &action.Output{
 				Files:    []string{info.DataFile},
-				RowCount: len(r.Rows), Columns: r.Columns,
+				RowCount: r.RecordCount, Columns: r.Columns,
 				Preview: prev, PreviewTruncated: trunc,
-				Summary:  fmt.Sprintf("转换 %s → 数据集 %s（%d 条记录）", filepath.Base(p.Input), name, len(r.Rows)),
+				Summary:  fmt.Sprintf("转换 %s → 数据集 %s（%d 条记录）", filepath.Base(p.Input), name, r.RecordCount),
 				Warnings: r.Warnings,
 				Details:  map[string]any{"dataset": name},
 			}
 			res = &types.ConvertResult{Success: true, Name: name, UpdatedAt: m.UpdatedAt, DataFile: info.DataFile,
-				RecordCount: len(r.Rows), Columns: r.Columns, Warnings: r.Warnings}
+				RecordCount: r.RecordCount, Columns: r.Columns, Warnings: r.Warnings}
 			out.Files = append(out.Files, info.SchemaFile)
 			out.SchemaRef = info.SchemaFile
 			res.SchemaFile = info.SchemaFile

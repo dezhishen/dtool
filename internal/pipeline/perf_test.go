@@ -19,8 +19,9 @@ import (
 //	go test ./internal/pipeline -bench Convert -benchmem
 //	DTOOL_BENCH_ROWS=150000 go test ./internal/pipeline -bench Convert   # 放大
 
-// perfXlsxRows 是内存回归与基准的默认行数。1 万行（约 0.35MB）已足够拉开信噪比，
-// 同时让默认的 go test ./... 只多花不到 1 秒；放大用 DTOOL_BENCH_ROWS。
+// perfXlsxRows 是内存回归的默认行数：4 万行（约 1.4MB）能让「整表物化」这种量级
+// 回归明显超限（旧实现约 200MB，流式约 22MB），同时只花 2 秒左右；放大用
+// DTOOL_BENCH_ROWS。
 func perfXlsxRows() int {
 	if s := os.Getenv("DTOOL_BENCH_ROWS"); s != "" {
 		var n int
@@ -28,7 +29,7 @@ func perfXlsxRows() int {
 			return n
 		}
 	}
-	return 10000
+	return 40000
 }
 
 // writeBigXlsx 生成 rows 行 × 5 列的 xlsx（固定随机种子，结果可复现），
@@ -81,12 +82,12 @@ func newPerfEnv(tb testing.TB, dir string) *Env {
 	return &Env{Ctx: tb.Context(), WS: ws, Preview: 0, NoRecord: true, Command: "dtool bench", MaxMemory: &off}
 }
 
-// TestPerfConvertExcelMemory 校验预检倍率 xlsxPeakFactor 没有低估真实开销：
-// 峰值堆不得超过「文件大小 × 倍率 × 1.3」。
+// TestPerfConvertExcelMemory 校验预检估算没有低估真实开销：
+// 峰值堆不得超过 xlsxNeed(文件大小) × 1.3。
 //
-// 两点放宽都刻意为之：一是 HeapAlloc 采样低于 CLI 口径的 RSS（实测 1H2G 下
-// 7.7MB xlsx ≈ ×245），二是 GC 时机有抖动。目标是拦住量级回归——比如某次改动让
-// 转换内存翻倍，而预检仍按 260 倍估算，用户就会被内核 OOM 静默杀掉。
+// 1.3 是给「HeapAlloc 采样低于 CLI 的 RSS 口径」与 GC 抖动留的余量。目标是拦住
+// 量级回归：例如有人重新引入 GetMergeCells 之类的整表物化（4 万行就会多出上百 MB），
+// 而预检仍按线性模型估算，用户就会被内核 OOM 静默杀掉。
 func TestPerfConvertExcelMemory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("-short：跳过性能回归")
@@ -100,13 +101,12 @@ func TestPerfConvertExcelMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}, perftest.Inclusive).Peak
-	factor := float64(peak) / float64(size)
-	limit := float64(size) * xlsxPeakFactor * 1.3
-	t.Logf("%d 行 xlsx：文件 %.2fMB，峰值堆 %.1fMB（×%.0f，预检按 ×%d 估算）",
-		perfXlsxRows(), perftest.MiB(size), perftest.MiB(peak), factor, xlsxPeakFactor)
+	need, limit := xlsxNeed(size), float64(xlsxNeed(size))*1.3
+	t.Logf("%d 行 xlsx：文件 %.2fMB，峰值堆 %.1fMB（×%.1f），预检估算 %.1fMB",
+		perfXlsxRows(), perftest.MiB(size), perftest.MiB(peak), float64(peak)/float64(size), perftest.MiB(need))
 	if float64(peak) > limit {
-		t.Errorf("转换峰值堆 %.1fMB 超过预检上限 %.1fMB（×%d × 1.3）：请同步调大 xlsxPeakFactor，否则内存不足时用户会被直接 OOM 杀掉",
-			perftest.MiB(peak), perftest.MiB(uint64(limit)), xlsxPeakFactor)
+		t.Errorf("转换峰值堆 %.1fMB 超过预检上限 %.1fMB：请同步调大 xlsxBaseOverhead/xlsxPeakFactor，否则内存不足时用户会被直接 OOM 杀掉",
+			perftest.MiB(peak), perftest.MiB(uint64(limit)))
 	}
 }
 

@@ -1,7 +1,11 @@
 package converter
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,22 +17,32 @@ import (
 )
 
 type Options struct {
-	Input     string
-	Sheet     string
-	OutDir    string
-	UpdatedAt time.Time // 写入 Schema 的更新日期，零值取当前时间
+	Input       string
+	Sheet       string
+	OutDir      string
+	UpdatedAt   time.Time // 写入 Schema 的更新日期，零值取当前时间
+	PreviewRows int       // 保留多少条类型化记录供调用方预览（0 表示不留）
 }
 
 type Result struct {
-	DataFile   string
-	SchemaFile string
-	Sheet      string
-	Columns    []string
-	Rows       []types.Row
-	Warnings   []string
+	DataFile    string
+	SchemaFile  string
+	Sheet       string
+	Columns     []string
+	RecordCount int
+	Preview     []types.Row // 前 PreviewRows 条记录（类型化），供 Action 预览
+	Warnings    []string
 }
 
-// ConvertExcel 流式读取 xlsx，整列推断类型后写出 data.json（保持列顺序）与 data.schema.json。
+// ConvertExcel 流式读取 xlsx，写出 data.json（保持列顺序）与 data.schema.json。
+//
+// 两阶段、单次解析：
+//
+//	阶段 1：逐行读单元格 → 累积每列类型统计，并把原始字符串按行追加到临时 JSONL；
+//	阶段 2：依据统计出的 Schema 读回 JSONL，逐行写成最终 data.json。
+//
+// 全程只驻留「一行 + 每列统计」，峰值内存与行数无关。旧实现把全部单元格、
+// 转置副本、类型化行以及整块序列化的 JSON 同时放在内存里（150k 行实测 1.5GB）。
 func ConvertExcel(o Options) (*Result, error) {
 	if _, err := os.Stat(o.Input); err != nil {
 		return nil, types.Errorf(types.CodeNotFound, "file not found: %s", o.Input)
@@ -41,7 +55,7 @@ func ConvertExcel(o Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open excel: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // 兜底；下面会更早关闭一次以释放临时文件
 
 	sheets := f.GetSheetList()
 	sheet := o.Sheet
@@ -55,58 +69,52 @@ func ConvertExcel(o Options) (*Result, error) {
 			WithDetail("available sheets: " + strings.Join(sheets, ", "))
 	}
 
-	res := &Result{Sheet: sheet}
-	if merged, _ := f.GetMergeCells(sheet); len(merged) > 0 {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("检测到 %d 个合并单元格，仅左上角有值，其余为 null", len(merged)))
+	if o.PreviewRows == 0 {
+		o.PreviewRows = 20 // 与 action.Preview 的默认值保持一致
 	}
 
-	it, err := f.Rows(sheet)
+	res := &Result{Sheet: sheet}
+	// 合并单元格数量：流式扫描（excelize 的 GetMergeCells 会整表物化）。
+	// 失败时静默跳过——这只是个提示性告警，不值得为它付出内存代价。
+	if n, err := mergeCount(o.Input, sheet); err == nil && n > 0 {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("检测到 %d 个合并单元格，仅左上角有值，其余为 null", n))
+	}
+
+	// 阶段 1：扫描单元格 → 列统计 + 临时 JSONL
+	rowsFile := filepath.Join(o.OutDir, ".rows.jsonl.tmp")
+	out, err := os.Create(rowsFile)
 	if err != nil {
 		return nil, err
 	}
-	defer it.Close()
-
-	var headers []string
-	var rows [][]string
-	for it.Next() {
-		cells, err := it.Columns()
-		if err != nil {
-			return nil, err
-		}
-		if allBlank(cells) {
-			continue
-		}
-		if headers == nil {
-			headers, res.Warnings = normalizeHeaders(cells, res.Warnings)
-			continue
-		}
-		rows = append(rows, cells)
+	headers, stats, records, scanWarns, err := scanRows(f, sheet, out)
+	if err != nil {
+		out.Close()
+		os.Remove(rowsFile)
+		return nil, err
 	}
+	if err := out.Close(); err != nil {
+		os.Remove(rowsFile)
+		return nil, err
+	}
+	_ = f.Close() // excelize 会把大表解压到临时文件，尽早释放
+	defer os.Remove(rowsFile)
+
 	if headers == nil {
 		return nil, fmt.Errorf("sheet %q is empty", sheet)
 	}
 	res.Columns = headers
+	res.RecordCount = records
+	res.Warnings = append(res.Warnings, scanWarns...)
 
-	cols := make([][]string, len(headers))
-	for i := range cols {
-		cols[i] = make([]string, len(rows))
+	schema := make([]ColumnSchema, len(headers))
+	for i, h := range headers {
+		schema[i] = stats[i].column(h, records)
 	}
-	for r, row := range rows {
-		for c := range headers {
-			if c < len(row) {
-				cols[c][r] = row[c]
-			}
-		}
-	}
-	schema := InferSchema(headers, cols, len(rows))
 
-	res.Rows = make([]types.Row, len(rows))
-	for r := range rows {
-		vals := make([]any, len(headers))
-		for c := range headers {
-			vals[c] = convertCell(schema[c].Type, cols[c][r])
-		}
-		res.Rows[r] = types.Row{Columns: headers, Values: vals}
+	// 阶段 2：按 Schema 把 JSONL 写成最终 data.json
+	res.DataFile = filepath.Join(o.OutDir, "data.json")
+	if err := writeTypedRows(rowsFile, res.DataFile, headers, schema, o.PreviewRows, &res.Preview); err != nil {
+		return nil, err
 	}
 
 	updated := o.UpdatedAt
@@ -114,15 +122,11 @@ func ConvertExcel(o Options) (*Result, error) {
 		updated = time.Now()
 	}
 	updated = updated.UTC()
-	res.DataFile = filepath.Join(o.OutDir, "data.json")
-	if err := writeJSON(res.DataFile, res.Rows); err != nil {
-		return nil, err
-	}
 	res.SchemaFile = filepath.Join(o.OutDir, "data.schema.json")
 	doc := map[string]any{
 		"source":       filepath.Base(o.Input),
 		"sheet":        sheet,
-		"record_count": len(rows),
+		"record_count": records,
 		"updated_at":   updated.Format(time.RFC3339),
 		"columns":      schema,
 	}
@@ -132,11 +136,171 @@ func ConvertExcel(o Options) (*Result, error) {
 	return res, nil
 }
 
-func writeJSON(path string, rows []types.Row) error {
-	if rows == nil {
-		rows = []types.Row{}
+// scanRows 逐行读取工作表：首行作为表头，之后每行累积列统计并写入 JSONL。
+// 返回表头、每列统计与数据行数。
+func scanRows(f *excelize.File, sheet string, w io.Writer) ([]string, []*colStat, int, []string, error) {
+	it, err := f.Rows(sheet)
+	if err != nil {
+		return nil, nil, 0, nil, err
 	}
-	return workspace.WriteJSONAtomic(path, rows)
+	defer it.Close()
+
+	var (
+		headers  []string
+		stats    []*colStat
+		records  int
+		warnings []string
+	)
+	bw := bufio.NewWriterSize(w, 1<<20)
+	defer bw.Flush()
+	for it.Next() {
+		cells, err := it.Columns()
+		if err != nil {
+			return nil, nil, 0, nil, err
+		}
+		if allBlank(cells) {
+			continue
+		}
+		if headers == nil {
+			headers, warnings = normalizeHeaders(cells, warnings)
+			stats = make([]*colStat, len(headers))
+			for i := range stats {
+				stats[i] = newColStat()
+			}
+			continue
+		}
+		line := make([]string, len(headers))
+		for i := range headers {
+			if i < len(cells) {
+				line[i] = cells[i]
+			}
+			stats[i].observe(line[i])
+		}
+		b, err := json.Marshal(line)
+		if err != nil {
+			return nil, nil, 0, nil, err
+		}
+		if _, err := bw.Write(b); err != nil {
+			return nil, nil, 0, nil, err
+		}
+		if err := bw.WriteByte('\n'); err != nil {
+			return nil, nil, 0, nil, err
+		}
+		records++
+	}
+	if err := it.Error(); err != nil {
+		return nil, nil, 0, nil, err
+	}
+	return headers, stats, records, warnings, nil
+}
+
+// writeTypedRows 读回 JSONL，按 Schema 把每行类型化后写成 data.json；
+// 需要预览时保留前 preview 条（类型化记录）。
+func writeTypedRows(rowsFile, dataFile string, headers []string, schema []ColumnSchema, preview int, out *[]types.Row) error {
+	in, err := os.Open(rowsFile)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(dataFile), ".data-*.json")
+	if err != nil {
+		return err
+	}
+	bw := bufio.NewWriterSize(tmp, 1<<20)
+	br := bufio.NewReaderSize(in, 1<<20)
+	rw := &rowWriter{w: bw}
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 {
+			var cells []string
+			if uerr := json.Unmarshal(bytes.TrimRight(line, "\n"), &cells); uerr != nil {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				return uerr
+			}
+			vals := make([]any, len(headers))
+			for i := range headers {
+				v := ""
+				if i < len(cells) {
+					v = cells[i]
+				}
+				vals[i] = convertCell(schema[i].Type, v)
+			}
+			row := types.Row{Columns: headers, Values: vals}
+			if err := rw.Write(row); err != nil {
+				tmp.Close()
+				os.Remove(tmp.Name())
+				return err
+			}
+			if preview > 0 && len(*out) < preview {
+				*out = append(*out, row)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return err
+		}
+	}
+	if err := rw.Close(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := bw.Flush(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), dataFile)
+}
+
+// rowWriter 把行流式写成与 json.MarshalIndent([]types.Row, "", "  ") 完全一致的字节：
+// 数组元素缩进 2 空格，元素内成员再缩进 2 空格，结尾补一个换行（与 WriteJSONAtomic 一致）。
+type rowWriter struct {
+	w   *bufio.Writer
+	n   int
+	row bytes.Buffer
+	ind bytes.Buffer
+}
+
+func (rw *rowWriter) Write(r types.Row) error {
+	b, err := r.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	rw.row.Reset()
+	if rw.n == 0 {
+		rw.row.WriteString("[\n")
+	} else {
+		rw.row.WriteString(",\n")
+	}
+	rw.row.WriteString("  ")
+	rw.ind.Reset()
+	if err := json.Indent(&rw.ind, b, "  ", "  "); err != nil {
+		return err
+	}
+	rw.row.Write(rw.ind.Bytes())
+	rw.n++
+	_, err = rw.w.Write(rw.row.Bytes())
+	return err
+}
+
+func (rw *rowWriter) Close() error {
+	if rw.n == 0 {
+		_, err := rw.w.WriteString("[]\n")
+		return err
+	}
+	_, err := rw.w.WriteString("\n]\n")
+	return err
 }
 
 func allBlank(cells []string) bool {
@@ -148,7 +312,7 @@ func allBlank(cells []string) bool {
 	return true
 }
 
-// normalizeHeaders 为空表头补 col_N，重复表头追加 _N，保证 JSON key 唯一。
+// normalizeHeaders 把空表头命名为 col_N、重复表头追加 _N，并记录告警。
 func normalizeHeaders(raw []string, warns []string) ([]string, []string) {
 	out := make([]string, len(raw))
 	used := map[string]int{}

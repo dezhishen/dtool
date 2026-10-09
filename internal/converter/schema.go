@@ -57,37 +57,129 @@ func sqlType(t string) string {
 
 func isBlank(s string) bool { return strings.TrimSpace(s) == "" }
 
-// detectType 仅基于整列非空值判断类型；前导零数字串与超长整数保持 string。
-func detectType(vals []string) (typ, format string) {
-	if len(vals) == 0 {
-		return "null", ""
+// colStat 逐行累积单列的统计信息；InferSchema 与流式转换共用它，
+// 保证「整列推断」的规则只有一份实现。
+type colStat struct {
+	nonNull int
+	seen    map[string]struct{}
+	order   []string // 前 enumLimit+1 个不同值，按首次出现顺序
+	over    bool     // 不同值超过 uniqueLimit，此时不再跟踪 seen/order
+
+	intOK  bool // 迄今所有非空值都满足整数规则（含 ≤15 位、无前导零）
+	numOK  bool // ... 都满足数字规则
+	boolOK bool // ... 都是 true/false
+	dateOK []bool
+
+	hasNum bool
+	min    *float64
+	max    *float64
+}
+
+func newColStat() *colStat {
+	c := &colStat{seen: map[string]struct{}{}, intOK: true, numOK: true, boolOK: true}
+	c.dateOK = make([]bool, len(dateLayouts))
+	for i := range c.dateOK {
+		c.dateOK[i] = true
 	}
-	all := func(f func(string) bool) bool {
-		for _, v := range vals {
-			if !f(strings.TrimSpace(v)) {
-				return false
+	return c
+}
+
+// observe 记录一个原始单元格值；空值不计入非空统计，也不影响类型判定。
+func (c *colStat) observe(raw string) {
+	if isBlank(raw) {
+		return
+	}
+	c.nonNull++
+	v := strings.TrimSpace(raw)
+
+	if !c.over {
+		if _, ok := c.seen[v]; !ok {
+			if len(c.seen) >= uniqueLimit {
+				c.over = true // 与原实现一致：溢出后不再收集，也不再判定 unique/enum
+			} else {
+				c.seen[v] = struct{}{}
+				if len(c.order) < enumLimit+1 {
+					c.order = append(c.order, v)
+				}
 			}
 		}
-		return true
 	}
-	if all(func(s string) bool {
-		return intRe.MatchString(s) && len(strings.TrimLeft(s, "-")) <= 15 && !leadZero.MatchString(s)
-	}) {
+
+	if c.intOK && !(intRe.MatchString(v) && len(strings.TrimLeft(v, "-")) <= 15 && !leadZero.MatchString(v)) {
+		c.intOK = false
+	}
+	if c.numOK && !(floatRe.MatchString(v) && !leadZero.MatchString(v) && len(v) <= 30) {
+		c.numOK = false
+	}
+	if c.boolOK {
+		if l := strings.ToLower(v); l != "true" && l != "false" {
+			c.boolOK = false
+		}
+	}
+	for i := range c.dateOK {
+		if c.dateOK[i] {
+			if _, err := time.Parse(dateLayouts[i].in, v); err != nil {
+				c.dateOK[i] = false
+			}
+		}
+	}
+	// 最小/最大值：整数规则蕴含数字规则，因此只在 numOK 时解析即可
+	// （原实现在最终类型为 integer/number 时也会解析全部非空值）。
+	if c.numOK {
+		f, _ := strconv.ParseFloat(v, 64)
+		if c.min == nil || f < *c.min {
+			m := f
+			c.min = &m
+		}
+		if c.max == nil || f > *c.max {
+			m := f
+			c.max = &m
+		}
+		c.hasNum = true
+	}
+}
+
+// typ 按「整数 → 数字 → 布尔 → 日期 → 文本」的顺序判定，要求全部非空值都满足。
+func (c *colStat) typ() (typ, format string) {
+	switch {
+	case c.nonNull == 0:
+		return "null", ""
+	case c.intOK:
 		return "integer", ""
-	}
-	if all(func(s string) bool { return floatRe.MatchString(s) && !leadZero.MatchString(s) && len(s) <= 30 }) {
+	case c.numOK:
 		return "number", ""
-	}
-	if all(func(s string) bool { l := strings.ToLower(s); return l == "true" || l == "false" }) {
+	case c.boolOK:
 		return "boolean", ""
 	}
-	for _, l := range dateLayouts {
-		l := l
-		if all(func(s string) bool { _, err := time.Parse(l.in, s); return err == nil }) {
+	for i, l := range dateLayouts {
+		if c.dateOK[i] {
 			return "date", l.out
 		}
 	}
 	return "string", ""
+}
+
+// column 依据累积结果产出列 Schema。
+func (c *colStat) column(name string, records int) ColumnSchema {
+	typ, format := c.typ()
+	cs := ColumnSchema{Name: name, Type: typ, SQLType: sqlType(typ), Format: format,
+		Nullable: c.nonNull < records}
+	if !c.over {
+		cs.Unique = c.nonNull == records && len(c.seen) == records && records > 0
+		if typ == "string" && len(c.seen) <= enumLimit && len(c.seen) < c.nonNull {
+			cs.Enum = c.order
+		}
+	}
+	for _, v := range c.order {
+		if len(cs.Samples) >= sampleCount {
+			break
+		}
+		cs.Samples = append(cs.Samples, convertCell(typ, v))
+	}
+	if typ == "integer" || typ == "number" {
+		cs.Min, cs.Max = c.min, c.max
+	}
+	return cs
 }
 
 func convertCell(typ, s string) any {
@@ -114,62 +206,24 @@ func convertCell(typ, s string) any {
 	return s
 }
 
+// detectType 仅基于整列非空值判断类型；保留它是为了单测能直接断言类型规则。
+func detectType(vals []string) (typ, format string) {
+	st := newColStat()
+	for _, v := range vals {
+		st.observe(v)
+	}
+	return st.typ()
+}
+
 // InferSchema 从按列整理的原始字符串推断每列 Schema。cols[i] 为第 i 列所有行（含空串）。
 func InferSchema(headers []string, cols [][]string, records int) []ColumnSchema {
 	out := make([]ColumnSchema, len(headers))
 	for i, h := range headers {
-		var nonNull []string
+		st := newColStat()
 		for _, v := range cols[i] {
-			if !isBlank(v) {
-				nonNull = append(nonNull, v)
-			}
+			st.observe(v)
 		}
-		typ, format := detectType(nonNull)
-		cs := ColumnSchema{Name: h, Type: typ, SQLType: sqlType(typ), Format: format,
-			Nullable: len(nonNull) < records}
-
-		seen := map[string]struct{}{}
-		overflow := false
-		var order []string
-		for _, v := range nonNull {
-			if _, ok := seen[v]; ok {
-				continue
-			}
-			if len(seen) >= uniqueLimit {
-				overflow = true
-				break
-			}
-			seen[v] = struct{}{}
-			if len(order) < enumLimit+1 {
-				order = append(order, v)
-			}
-		}
-		if !overflow {
-			cs.Unique = len(nonNull) == records && len(seen) == records && records > 0
-			if typ == "string" && len(seen) <= enumLimit && len(seen) < len(nonNull) {
-				cs.Enum = order
-			}
-		}
-		for _, v := range order {
-			if len(cs.Samples) >= sampleCount {
-				break
-			}
-			cs.Samples = append(cs.Samples, convertCell(typ, v))
-		}
-		if typ == "integer" || typ == "number" {
-			for _, v := range nonNull {
-				f, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
-				if cs.Min == nil || f < *cs.Min {
-					m := f
-					cs.Min = &m
-				}
-				if cs.Max == nil || f > *cs.Max {
-					m := f
-					cs.Max = &m
-				}
-			}
-		}
-		out[i] = cs
+		out[i] = st.column(h, records)
 	}
 	return out
 }

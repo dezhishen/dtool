@@ -257,7 +257,8 @@ func TestConvertMemoryGuard(t *testing.T) {
 	if !errors.As(err, &te) || te.Code != types.CodeExec || !strings.Contains(te.Message, "Excel 文件") {
 		t.Fatalf("err = %v", err)
 	}
-	if !strings.Contains(te.Detail, "260 倍") || !strings.Contains(te.Hint, "--max-memory 0") {
+	if !strings.Contains(te.Detail, "固定开销") || !strings.Contains(te.Detail, "× 6") ||
+		!strings.Contains(te.Hint, "--max-memory 0") {
 		t.Fatalf("not actionable: %q / %q", te.Detail, te.Hint)
 	}
 	// --load-mode 只对 query 生效，发给 convert 是误导
