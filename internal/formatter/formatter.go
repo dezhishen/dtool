@@ -10,6 +10,7 @@ import (
 
 	"github.com/dezhishen/dtool/pkg/types"
 	"github.com/olekukonko/tablewriter"
+	"github.com/olekukonko/tablewriter/tw"
 )
 
 var Formats = []string{"json", "csv", "markdown", "table", "xlsx"}
@@ -85,12 +86,16 @@ func Write(w io.Writer, format string, r *types.QueryResult) error {
 	case "xlsx":
 		return writeXLSX(w, r)
 	case "table":
-		t := tablewriter.NewWriter(w)
-		t.SetHeader(r.Columns)
-		t.SetAutoFormatHeaders(false)
-		t.AppendBulk(records(r))
-		t.Render()
-		return nil
+		t := tablewriter.NewTable(w, tablewriter.WithHeaderAutoFormat(tw.Off)) // 保持列名原样，不转大写
+		hdr := make([]any, len(r.Columns))
+		for i, c := range r.Columns {
+			hdr[i] = c
+		}
+		t.Header(hdr...)
+		if err := t.Bulk(records(r)); err != nil {
+			return err
+		}
+		return t.Render()
 	}
 	return types.Errorf(types.CodeUsage, "unsupported format %q", format).
 		WithHint("可选: " + strings.Join(Formats, " / "))
