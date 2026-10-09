@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0 # 需要完整历史与 tag 来生成说明
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
