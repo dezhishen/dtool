@@ -92,14 +92,9 @@ JSON → 内存 SQLite 有两种装入方式，`--load-mode` 可选 `auto`（默
 
 `auto` 按实际文件大小自适应：**≥32MB 自动转流式**；若探测到可用内存不足以整块解析（×13 超预算），也自动转流式。
 
-1 核 2GB 实测（同一台机器，限制为 cgroup 2GB + 单核）：
-
-| 数据 | 旧版（只有整块解析） | `auto` |
-|------|----------------------|--------|
-| 17MB / 10 万行 | 3.2s，267MB | 2.4s，275MB（走 full） |
-| 104MB / 100 万行日志 | 16.5s，1543MB | 19s，**157MB**（走 stream） |
-| 168MB / 100 万行订单 | **被 OOM 杀掉** | 29s，**183MB** |
-| 456MB / 500 万行 | **被 OOM 杀掉** | 1:29，**604MB** |
+1 核 2GB 实测（cgroup 2GB + 单核 + 禁 swap）：17MB / 10 万行 → 3.2s、236MB；
+456MB / 500 万行 → 1:31、603MB；1.34GB / 1400 万行 → 3:42、1637MB（需 `--max-memory 0`，
+默认预检会在约 850MB 以上提前拦下）。
 
 流式模式下内存不再随文件线性暴涨，限制主要变成**耗时**。`--timeout` 只约束**查询阶段**（默认 60s）；载入是本地的读写与 CPU 工作，不受它限制，由内存看门狗和 Ctrl+C 兜底。
 
@@ -111,30 +106,24 @@ dtool query --timeout 10m      --sql '...'    # 查询本身很重时再调大�
 
 ### Excel 输入的现实边界
 
-`convert` 用 excelize 整表解析，**没有流式开关**，峰值内存 ≈ xlsx 文件大小 × 260（xlsx 是压缩容器，解压后膨胀很大）：
+`convert` 是**流式**的（两阶段、单次解析：逐行读单元格累积列统计并落临时 JSONL，再按推断出的 Schema 逐行写成 `data.json`），峰值内存 ≈ **32MB + 文件 × 3**，与行数无关：7.4MB / 15 万行 × 9 列 → 43MB；53.3MB / 105 万行 × 8 列（Excel 单表行数上限）→ **72MB、1:10**。
 
-| xlsx 大小 | 预估峰值 | 1 核 2GB |
-|-----------|----------|----------|
-| 1MB | 260MB | 可以 |
-| 6MB | 1.6GB | 接近上限 |
-| 7.7MB / 15 万行 × 6 列 | 1.9GB | **载入前被拦下**（`--max-memory 0` 强跑实测峰值 1.89GB） |
+预检按「32MB + 文件 × 6」估算（约为实测的 1.7 倍），超出预算时会在转换前拦下并给出数字。上一个版本这里是 ×260：同一个 7.4MB 文件要 1.9GB，17.8MB 的文件在 2GB 上限下直接被 OOM 杀掉。
 
-大表建议先拆成多个 xlsx 分别导入，或先转成 JSON 再用 `dtool query`（走 `--load-mode stream`，峰值降到 ×2）。
+### 性能测试
 
-### 性能回归测试
-
-上表的结论不只写在文档里，也在测试里，随 `go test ./...` 一起跑（`-short` 跳过）：
+**测试环境、方式、全部结果与 1 核 2GB 的能力边界见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)。** 回归用例随 `go test ./...` 一起跑（`-short` 跳过）：
 
 | 用例 | 断言 |
 |------|------|
-| `TestPerfLoadModeMemoryRatio` | 流式装入的存活堆峰值须比整块解析低 1.3 倍以上（每 10ms 停一次世界取存活集，实测 10–20 倍） |
-| `TestPerfConvertExcelMemory` | Excel 转换的峰值堆不得超过预检倍率 `×260 × 1.3`，防止「实际变差而预检没跟上」导致静默 OOM |
+| `TestPerfLoadModeMemoryRatio` | 流式装入的存活堆峰值须比整块解析低 1.3 倍以上（实测约 9 倍） |
+| `TestPerfConvertExcelMemory` | Excel 转换的峰值堆不得超过预检估算（`xlsxNeed(文件) × 1.3`），防止重新引入整表物化这类量级回归 |
 
-吞吐用基准看，需要显式开启：
+吞吐用基准看，需要显式开启（数值见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)）：
 
 ```bash
-make bench                            # JSON 2 万行 / xlsx 1 万行
-DTOOL_BENCH_ROWS=200000 make bench    # 放大：JSON 20 万行 / xlsx 20 万行
+make bench                            # JSON 2 万行 / xlsx 4 万行
+DTOOL_BENCH_ROWS=200000 make bench    # 放大行数
 go test ./internal/query -bench LoadStream -benchmem   # 只看某一项
 ```
 

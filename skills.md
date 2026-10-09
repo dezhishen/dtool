@@ -120,12 +120,12 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
 - `auto` 按文件大小自适应：**≥32MB 走流式**；可用内存不够整块解析时也自动转流式。所以一般情况下不用管它。
 - 峰值内存：`full` ≈ 文件大小 × 13；`stream` ≈ ×2。
 - 1 核 2GB 下实测（默认 `auto`）：10 万行 2.4s；100 万行 19–29s；500 万行 1:29、604MB。默认参数即可，不必再调 `--timeout`。
-- **Excel（`convert`）没有流式开关**：峰值 ≈ xlsx 文件大小 × 260（实测），2GB 下 6MB 左右就见顶。15 万行 / 7.7MB 的 xlsx 预估 1.9GB 会被拦下；`--max-memory 0` 强跑实测峰值 1.89GB，正好不炸。大表请拆成多个 xlsx，或先转成 JSON 再 `query`（可走 `--load-mode stream`）。
+- **Excel（`convert`）也是流式的**：两阶段、单次解析，峰值 ≈ 32MB + 文件 × 3（实测 7.4MB/15 万行 → 47MB，17.8MB/40 万行 → 74MB），与行数无关。预检按「32MB + 文件 × 6」估算，超出预算才会在转换前拦下并给出数字与退出口。
 - `--timeout` 只约束**查询阶段**（默认 60s），载入耗时不计入。若内存充足、只想要速度，可用 `--load-mode full`（只解析一遍，更快）。
 - 内存不足时会**快速失败并说明原因**（含「预计需 xx、可用 xx」与 `--max-memory 0` 退出口），不会静默被杀；这类失败同样留下 `failed` 的 Action。建议按场景给：`query` 推荐 `--load-mode stream`，`convert` 只建议拆分输入——它没有 `--load-mode`，照抄那个参数会白试一轮。
 - 看到 stderr 的「载入 xxx.json（…，流式解析，预计需约 xx 内存）...」说明正在载入；若进程随后消失，就是内存不够。
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
-- 性能结论有回归测试，随 `go test ./...` 执行：`TestPerfLoadModeMemoryRatio`（流式峰值须低于整块解析 1.3 倍以上）、`TestPerfConvertExcelMemory`（转换峰值不得超过预检倍率）。吞吐用 `make bench` 看，`DTOOL_BENCH_ROWS=N` 放大，`-short` 跳过这些回归。
+- 性能结论有回归测试（环境/方式/结果见 `docs/PERFORMANCE.md`），随 `go test ./...` 执行：`TestPerfLoadModeMemoryRatio`（流式峰值须低于整块解析 1.3 倍以上）、`TestPerfConvertExcelMemory`（转换峰值不得超过预检倍率）。吞吐用 `make bench` 看，`DTOOL_BENCH_ROWS=N` 放大，`-short` 跳过这些回归。
 
 ## 注意事项
 

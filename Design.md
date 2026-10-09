@@ -754,27 +754,42 @@ func (r *Recorder) Annotate(id, text, by string) error
 
 ### 8.3 Excel 转换模块
 
+**流式两阶段、单次解析**（峰值内存 ≈ 32MB + 文件 × 3，与行数无关）：
+
 ```go
-func ConvertExcel(input, sheet, outputDir string) (*ConvertResult, error) {
-    f, err := excelize.OpenFile(input)
-    rows, err := f.GetRows(sheet)
-    headers := rows[0]
-    records := make([]map[string]any, 0, len(rows)-1)
-    for _, row := range rows[1:] {
-        rec := make(map[string]any)
-        for i, h := range headers {
-            if i < len(row) {
-                rec[h] = inferCellType(row[i])
-            }
-        }
-        records = append(records, rec)
+func ConvertExcel(o Options) (*Result, error) {
+    // 阶段 1：逐行读单元格 → 每列累积统计（colStat）+ 原始值落临时 JSONL
+    f, _ := excelize.OpenFile(o.Input)
+    it, _ := f.Rows(o.Sheet)          // 迭代器是流式的；GetMergeCells/GetRows 会整表物化
+    for it.Next() {
+        cells, _ := it.Columns()
+        for i := range headers { stats[i].observe(cells[i]) }
+        jsonl.Write(cells)            // 一行一个 JSON 数组，保持列序
     }
-    writeJSON(filepath.Join(outputDir, "data.json"), records)
-    schema := InferSchema(records, headers) // 必有，含 updated_at
-    writeJSON(filepath.Join(outputDir, "data.schema.json"), schema)
-    return &ConvertResult{...}, nil
+    f.Close()                          // 释放 excelize 的大表临时文件
+
+    // 阶段 2：按 stats 推断出的 Schema 读回 JSONL，逐行写成 data.json
+    schema := statsPerColumn(stats, records)   // 与 InferSchema 同一实现
+    for line := range jsonlLines {             // 只驻留一行
+        rowWriter.Write(typedRow(line, schema)) // 缩进与 json.MarshalIndent 逐字节一致
+    }
 }
 ```
+
+要点：
+
+- 单元格读取只用 `File.Rows()` 迭代器。`GetMergeCells`/`GetRows`/`GetCols` 都会走
+  `workSheetReader`，把整张表反序列化成 `xlsxWorksheet` 缓存到 `File` 里——实测
+  15 万行 × 9 列要多花 855MB。合并单元格数量改为直接扫 zip 里的 worksheet XML
+  （逐 token、内存 O(1)，见 `internal/converter/merge.go`）。
+- 类型推断不能只看采样，必须整列：阶段 1 的 `colStat` 累积「是否全部满足整数/数字/
+  布尔/日期」、非空数、去重数（≤10 万）、首个不同值（用于 enum 与样例）、min/max。
+  `InferSchema` 也改为用同一个 `colStat`，保证「整列推断」只有一份实现。
+- `data.json` 由 `rowWriter` 逐行写出，缩进与 `json.MarshalIndent([]types.Row, "", "  ")`
+  完全一致（有测试逐字节比对），因此产物对下游没有格式变化。
+- 调用方不再拿到全部记录：`Result` 只带 `RecordCount` 与 `Preview`（供 Action 预览）。
+- 预检倍率随之从「×260」换成线性模型「32MB + 文件 × 6」（实测 ×3，留 1.7 倍余量），
+  见 8.4.1。
 
 ### 8.4 SQL 查询模块
 
@@ -792,7 +807,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 
 ### 8.4.1 内存预算与 OOM 防护（internal/memguard）
 
-载入是「把整个 JSON 解析进内存 SQLite」，峰值内存与输入体积成正比（实测 JSON ≈ ×13，xlsx ≈ ×260）。这带来一个严重体验问题：**内存不足时进程会被内核 OOM 直接杀掉，用户看不到任何原因**。memguard 把这种情况变成普通错误：
+载入是「把整个 JSON 解析进内存 SQLite」，峰值内存与输入体积成正比（实测 JSON ≈ ×13）。这带来一个严重体验问题：**内存不足时进程会被内核 OOM 直接杀掉，用户看不到任何原因**。memguard 把这种情况变成普通错误：
 
 | 环节 | 行为 |
 |------|------|
@@ -803,9 +818,9 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 
 预算来源：`--max-memory` > `DTOOL_MAX_MEMORY` > cgroup v2/v1 限制（`min(limit-used, MemAvailable)`）> 未知（不检查）。统一预留 15% 余量。失败也会写入一条 `failed` 的 Action，便于事后追溯。
 
-估算倍率都来自实测：JSON 整块解析 ≈ ×13、流式 ≈ ×2、xlsx 转换 ≈ ×260（xlsx 是压缩容器，解压后膨胀大）。倍率不同，**处置建议也必须分场景**：`--load-mode` 只对 `query` 成立，把它发给 `convert` 会让人以为换个参数就能过，所以 `CheckSize`/`CheckNeed` 显式接收 `hint`（`HintLoadMode` / `HintSplitInput`），并有测试锁定这一点。
+估算模型都来自实测：JSON 整块解析 ≈ 文件 × 13、流式装入 ≈ × 2；xlsx 转换是「32MB 固定开销 + 文件 × 3」的线性模型（见 8.1）。倍率不同，**处置建议也必须分场景**：`--load-mode` 只对 `query` 成立，把它发给 `convert` 会让人以为换个参数就能过，所以 `CheckSize`/`CheckNeed` 显式接收 `hint`（`HintLoadMode` / `HintSplitInput`），并有测试锁定这一点。
 
-1 核 2GB 实测：7.7MB / 15 万行 × 6 列的 xlsx 预估 1.9GB，载入前即被拦下（避免用户白等半分钟后被 OOM 杀掉）；`--max-memory 0` 强制运行时峰值 1.89GB，能跑完但已顶到 cgroup 上限。
+1 核 2GB 实测：7.4MB / 15 万行 × 9 列的 xlsx 现在峰值 47MB、12.8s（改造前 1.9GB、21.2s）；17.8MB / 40 万行的 xlsx 现在 74MB、23.5s（改造前在 2GB 上限下直接 OOM）。预算不足（如 `--max-memory 100M`）时仍在转换前拦下并给出「32MB 固定开销 + 文件 × 6 的流式估算需 134MB」。
 
 #### 8.4.2 装入方式（--load-mode）
 
@@ -818,7 +833,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 
 `--timeout` 只约束查询阶段；载入是本地的读写与 CPU 工作，大文件可能远超默认 60s，把它算进去会让默认值变成陷阱（载入由内存看门狗与信号中断兜底）。
 
-**回归测试**：结论由测试而不是文档守住。`internal/query/perf_test.go` 的 `TestPerfLoadModeMemoryRatio` 断言流式存活堆峰值比整块解析低 1.3 倍以上（实测 10–20 倍；采样方式见下——直接读 HeapAlloc 会把未回收的垃圾算进来，在 CI 上曾把差距压到 1.28 倍而误报），`internal/pipeline/perf_test.go` 的 `TestPerfConvertExcelMemory` 断言转换峰值不超过 `xlsxPeakFactor × 1.3`（HeapAlloc 口径低于 CLI 的 RSS，留 30% 余量，用来拦量级回归）。峰值采样放在只被 `_test.go` 引用的 `internal/perftest`，两种口径并列：`Inclusive`（直接读 HeapAlloc，含垃圾，接近 RSS，适合上界断言）与 `Live`（每次采样先 GC 取存活集，适合比较「谁更省内存」）；吞吐走 `Benchmark*`（`make bench`，`DTOOL_BENCH_ROWS` 放大）。这些随默认的 `go test ./...` 运行（`-short` 跳过），CI 另跑一轮 `-benchtime 1x` 的基准冒烟。
+**回归测试**（测试环境、方式与完整结果见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)）：结论由测试而不是文档守住。`internal/query/perf_test.go` 的 `TestPerfLoadModeMemoryRatio` 断言流式存活堆峰值比整块解析低 1.3 倍以上（实测 10–20 倍；采样方式见下——直接读 HeapAlloc 会把未回收的垃圾算进来，在 CI 上曾把差距压到 1.28 倍而误报），`internal/pipeline/perf_test.go` 的 `TestPerfConvertExcelMemory` 断言转换峰值不超过 `xlsxPeakFactor × 1.3`（HeapAlloc 口径低于 CLI 的 RSS，留 30% 余量，用来拦量级回归）。峰值采样放在只被 `_test.go` 引用的 `internal/perftest`，两种口径并列：`Inclusive`（直接读 HeapAlloc，含垃圾，接近 RSS，适合上界断言）与 `Live`（每次采样先 GC 取存活集，适合比较「谁更省内存」）；吞吐走 `Benchmark*`（`make bench`，`DTOOL_BENCH_ROWS` 放大）。这些随默认的 `go test ./...` 运行（`-short` 跳过），CI 另跑一轮 `-benchtime 1x` 的基准冒烟。
 
 ### 8.5 图表生成模块
 
