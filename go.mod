@@ -8,7 +8,7 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/spf13/cobra v1.10.2
 	github.com/vicanso/go-charts/v2 v2.6.10
-	github.com/wcharczuk/go-chart/v2 v2.1.0
+	github.com/wcharczuk/go-chart/v2 v2.1.2
 	github.com/xuri/excelize/v2 v2.11.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.50.1
