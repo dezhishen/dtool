@@ -79,7 +79,7 @@ dtool version --deps       # 附带编译进二进制的依赖模块及版本
 
 ## 示例
 
-[examples/](examples/README.md) 提供 4 个可直接运行的示例（销售报表、人员分析、脏数据处理、pipeline 与 Action 协作），含数据源文件：`make build && bash examples/run-all.sh`。
+[examples/](examples/README.md) 提供 4 个可直接运行的示例，含数据源文件，每个示例目录下都有 README 说明「什么场景、逐步做了什么、产物是什么」：[销售报表](examples/01-sales-report/README.md) · [人员分析](examples/02-hr-analysis/README.md) · [脏数据处理](examples/03-messy-data/README.md) · [pipeline 与 Action 协作](examples/04-pipeline-actions/README.md)。运行：`make build && bash examples/run-all.sh`。
 
 ## 场景手册（按职业）
 
