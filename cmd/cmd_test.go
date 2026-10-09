@@ -18,7 +18,7 @@ func run(t *testing.T, args ...string) (map[string]any, error) {
 	oldArgs, oldOut := os.Args, os.Stdout
 	r, w, _ := os.Pipe()
 	os.Args, os.Stdout = append([]string{"dtool"}, args...), w
-	g, cfgFont = globalFlags{}, ""
+	g, cfgFont, parsedMaxMemory = globalFlags{}, "", nil
 	err := Execute("test")
 	w.Close()
 	os.Args, os.Stdout = oldArgs, oldOut
@@ -313,5 +313,66 @@ func TestVersionCommandAndFlag(t *testing.T) {
 	}
 	if _, err := run(t, "version", "extra"); err == nil {
 		t.Error("positional args accepted")
+	}
+}
+
+func TestMaxMemoryFlag(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := xlsx(t, dir)
+
+	// 非法容量 -> 参数错误
+	if m, err := run(t, "--max-memory", "abc", "actions", "list"); err == nil || m["code"].(float64) != 2 {
+		t.Fatalf("bad size: %v %v", m, err)
+	}
+	// 预算过小 -> 可读的失败，而不是被 OOM 杀掉；且失败也留下 Action 记录
+	m, err := run(t, "--max-memory", "1K", "convert", "--input", data)
+	if err == nil || m["code"].(float64) != 4 || m["action_id"] == nil {
+		t.Fatalf("tiny budget: %v %v", m, err)
+	}
+	if !strings.Contains(m["hint"].(string), "--max-memory 0") {
+		t.Fatalf("hint = %v", m["hint"])
+	}
+	// 关闭检查后正常完成
+	if res, err := run(t, "--max-memory", "0", "convert", "--input", data); err != nil {
+		t.Fatalf("guard off: %v %v", res, err)
+	}
+	// 预算充足时正常完成
+	if res, err := run(t, "--max-memory", "4G", "convert", "--input", data, "--name", "big"); err != nil {
+		t.Fatalf("enough: %v %v", res, err)
+	}
+}
+
+func TestLoadModeFlagAndConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// 非法值 -> 参数错误
+	if m, err := run(t, "--load-mode", "fast", "actions", "list"); err == nil || m["code"].(float64) != 2 {
+		t.Fatalf("bad mode: %v %v", m, err)
+	}
+	if _, err := run(t, "convert", "--input", xlsx(t, dir), "--name", "d"); err != nil {
+		t.Fatal(err)
+	}
+	// 三种模式结果一致
+	for _, mode := range []string{"auto", "stream", "full"} {
+		q, err := run(t, "--load-mode", mode, "query", "--source", "d=dataset:d", "--sql", `SELECT COUNT(*) AS n FROM d`)
+		if err != nil {
+			t.Fatalf("mode %s: %v", mode, err)
+		}
+		if n := q["rows"].([]any)[0].(map[string]any)["n"].(float64); n != 3 {
+			t.Fatalf("mode %s: n = %v", mode, n)
+		}
+	}
+	// 配置文件里的 load_mode 生效（命令行未指定时）
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("load_mode: stream\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(t, "-c", "config.yaml", "query", "--source", "d=dataset:d", "--sql", `SELECT COUNT(*) AS n FROM d`); err != nil {
+		t.Fatalf("config load_mode: %v", err)
+	}
+	// 命令行优先于配置文件
+	if _, err := run(t, "-c", "config.yaml", "--load-mode", "full", "query", "--source", "d=dataset:d", "--sql", `SELECT COUNT(*) AS n FROM d`); err != nil {
+		t.Fatalf("flag should win: %v", err)
 	}
 }

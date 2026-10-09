@@ -12,6 +12,7 @@ import (
 	"github.com/dezhishen/dtool/internal/converter"
 	"github.com/dezhishen/dtool/internal/dataset"
 	"github.com/dezhishen/dtool/internal/formatter"
+	"github.com/dezhishen/dtool/internal/memguard"
 	"github.com/dezhishen/dtool/internal/query"
 	"github.com/dezhishen/dtool/internal/visualize"
 	"github.com/dezhishen/dtool/internal/workspace"
@@ -27,7 +28,14 @@ type Env struct {
 	Preview  int
 	NoRecord bool
 	Command  string
+	// MaxMemory 内存预算：nil 自动探测，指向 0 表示关闭检查（--max-memory）。
+	MaxMemory *uint64
+	// LoadMode 传给查询的装入方式（auto / stream / full）。
+	LoadMode string
 }
+
+// xlsxPeakFactor：xlsx 经压缩，解析成数据集的内存约为文件大小的 260 倍（实测）。
+const xlsxPeakFactor = 260
 
 // run 负责 Action 的 Start/Success/Fail 生命周期与产物目录。
 func (e *Env) run(typ string, input map[string]any, parent, derived string,
@@ -95,6 +103,13 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 	var res *types.ConvertResult
 	a, err := e.run("convert", map[string]any{"input": p.Input, "sheet": p.Sheet, "name": name},
 		parentID, "", func(id, _ string) (*action.Output, error) {
+			// 放进回调内，内存不足时同样留下一条 failed 的 Action，便于事后排查
+			size := memguard.SizeOf(p.Input)
+			mem := memguard.Budget(e.MaxMemory)
+			if err := memguard.CheckSize("Excel 文件", size, xlsxPeakFactor, mem, memguard.HintSplitInput); err != nil {
+				return nil, err
+			}
+			memguard.Progress(os.Stderr, memguard.DefaultProgressMinSize, filepath.Base(p.Input), size, size*xlsxPeakFactor, "解析 xlsx")
 			stage, err := ds.NewStaging()
 			if err != nil {
 				return nil, err
@@ -188,7 +203,8 @@ func (e *Env) Query(p QueryParams, parentID string) (*types.QueryResult, error) 
 	var res *types.QueryResult
 	a, err := e.run("query", input, parentID, derived, func(_, dir string) (*action.Output, error) {
 		r, err := query.Run(e.Ctx, query.Options{SQL: p.SQL, Sources: sources,
-			Roots: []string{e.WS.Root, cwd}, Lookup: (&dataset.Store{WS: e.WS}).Lookup, Sandbox: p.Sandbox, MaxRows: p.MaxRows, Timeout: p.Timeout})
+			Roots: []string{e.WS.Root, cwd}, Lookup: (&dataset.Store{WS: e.WS}).Lookup,
+			Sandbox: p.Sandbox, MaxRows: p.MaxRows, Timeout: p.Timeout, MaxMemory: e.MaxMemory, LoadMode: e.LoadMode})
 		if err != nil {
 			return nil, err
 		}

@@ -17,6 +17,7 @@ type Config struct {
 	Font        string `yaml:"font"`         // TTF/TTC 字体路径，用于图表中文
 	Workspace   string `yaml:"workspace"`    // 工作区目录
 	PreviewRows int    `yaml:"preview_rows"` // Action 预览行数
+	LoadMode    string `yaml:"load_mode"`    // JSON 装入方式：auto / stream / full
 }
 
 // Load 读取配置；font/workspace 中的相对路径相对配置文件所在目录解析，支持 ~/ 前缀。

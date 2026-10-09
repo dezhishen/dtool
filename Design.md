@@ -315,6 +315,9 @@ dtool visualize --input latest:query --type pie --x region --y total
 | `--preview-rows` | Action 预览行数，默认 20 |
 | `--no-record` | 跳过 Action 记录（用于临时查询）；此时 stdout 不含 `action_id`，且不可被后续命令引用 |
 | `--sandbox` | 默认开启：SQL 仅允许读取 `--source` 绑定文件与工作区内文件，禁止读取任意系统路径（如 `/etc/passwd`）、URL 与写入类语句 |
+| `--load-mode` | JSON 装入方式：`auto`（默认，按文件大小与可用内存自适应）/ `stream` / `full` |
+| `--max-memory` | 内存预算，如 `4G`/`512M`；`0` 关闭检查（默认自动探测 cgroup v2/v1 与系统可用内存），见 8.4.1 |
+| `-c, --config` | 配置文件，命令行参数优先；严格模式拒绝未知键 |
 
 **退出码与 stdout 约定**：成功退出码 0，stdout 为结构化 JSON；失败退出码非 0（1 通用、2 参数错误、3 引用不存在、4 执行失败），**stdout 仍输出 `ErrorResponse` JSON**，人类可读日志只写 stderr。
 
@@ -787,6 +790,34 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 
 **表名约定**：优先使用 `--source` 别名；也可写文件路径，例如 `SELECT * FROM "data.json"`（双引号包裹）。
 
+### 8.4.1 内存预算与 OOM 防护（internal/memguard）
+
+载入是「把整个 JSON 解析进内存 SQLite」，峰值内存与输入体积成正比（实测 JSON ≈ ×13，xlsx ≈ ×260）。这带来一个严重体验问题：**内存不足时进程会被内核 OOM 直接杀掉，用户看不到任何原因**。memguard 把这种情况变成普通错误：
+
+| 环节 | 行为 |
+|------|------|
+| 载入前 | `CheckSize` 按输入体积 × 倍率估算峰值，超出可用预算即失败，`detail` 给出体积、倍率、可用量与来源，`hint` 给出退出口 |
+| 运行期 | `Watch` 每 200ms 采样本进程内存（Linux 读 `/proc/self/status`，其他平台用 Go 统计），超过预算即 `context.CancelCause`；`PressureError` 把它转成用户可读错误 |
+| 兜底 | 数据源 ≥8MB 时打印载入进度到 stderr；即便被强杀，用户也能看出卡在哪个文件 |
+| 软上限 | 同时调用 `debug.SetMemoryLimit(预算)`，让 GC 提前发力，尽量不碰 cgroup 硬限制 |
+
+预算来源：`--max-memory` > `DTOOL_MAX_MEMORY` > cgroup v2/v1 限制（`min(limit-used, MemAvailable)`）> 未知（不检查）。统一预留 15% 余量。失败也会写入一条 `failed` 的 Action，便于事后追溯。
+
+估算倍率都来自实测：JSON 整块解析 ≈ ×13、流式 ≈ ×2、xlsx 转换 ≈ ×260（xlsx 是压缩容器，解压后膨胀大）。倍率不同，**处置建议也必须分场景**：`--load-mode` 只对 `query` 成立，把它发给 `convert` 会让人以为换个参数就能过，所以 `CheckSize`/`CheckNeed` 显式接收 `hint`（`HintLoadMode` / `HintSplitInput`），并有测试锁定这一点。
+
+1 核 2GB 实测：7.7MB / 15 万行 × 6 列的 xlsx 预估 1.9GB，载入前即被拦下（避免用户白等半分钟后被 OOM 杀掉）；`--max-memory 0` 强制运行时峰值 1.89GB，能跑完但已顶到 cgroup 上限。
+
+#### 8.4.2 装入方式（--load-mode）
+
+| 方式 | 实现 | 峰值内存 | 说明 |
+|------|------|----------|------|
+| `full` | 整块 `Unmarshal` 成 `[]Row` 再插入 | ≈ 文件 × 13 | 快，但内存线性放大 |
+| `stream` | 两遍流式：第一遍按 JSON 键序建立列与类型，第二遍逐行插入 | ≈ 文件 × 2 | 内存与文件大小基本无关，代价是解析两遍 |
+
+`auto`（默认）按**实际文件大小**自适应：`size ≥ 32MB` 即转流式；此外若 `size × 13` 超出可用预算也转流式。流式用 `json.Decoder` 逐 token 读取，**保持行内键序**（map 会丢顺序，列顺序必须稳定），并逐行累积类型统计（布尔列与整块解析一致落成 INTEGER 0/1）。两种方式对同一输入产生完全相同的列顺序、类型与结果（有等价性测试覆盖）。
+
+`--timeout` 只约束查询阶段；载入是本地的读写与 CPU 工作，大文件可能远超默认 60s，把它算进去会让默认值变成陷阱（载入由内存看门狗与信号中断兜底）。
+
 ### 8.5 图表生成模块
 
 ```go
@@ -826,6 +857,7 @@ func RenderChart(data *QueryResult, chartType, xField, yField, title, output str
 font: /usr/share/fonts/truetype/arphic/uming.ttc
 workspace: .dtool
 preview_rows: 20
+load_mode: auto       # auto / stream / full
 ```
 
 ### 8.6 输出格式化模块
@@ -907,7 +939,7 @@ dtool/
 │   │   └── schema.go       # Schema 推断
 │   ├── query/
 │   │   ├── query.go        # 重写/沙箱/执行
-│   │   └── load.go         # JSON → 内存 SQLite
+│   │   ├── load.go         # JSON → 内存 SQLite
 │   ├── visualize/
 │   │   └── chart.go
 │   ├── formatter/

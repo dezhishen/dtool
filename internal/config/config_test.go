@@ -46,6 +46,13 @@ func TestLoadAbsoluteAndHome(t *testing.T) {
 	}
 }
 
+func TestLoadModeField(t *testing.T) {
+	c, err := Load(write(t, "load_mode: stream\n"))
+	if err != nil || c.LoadMode != "stream" {
+		t.Fatalf("load_mode: %+v %v", c, err)
+	}
+}
+
 func TestLoadEmptyAndErrors(t *testing.T) {
 	if c, err := Load(write(t, "")); err != nil || c.Font != "" {
 		t.Fatalf("empty file: %+v %v", c, err)

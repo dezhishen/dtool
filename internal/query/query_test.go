@@ -2,13 +2,16 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dezhishen/dtool/internal/memguard"
 	"github.com/dezhishen/dtool/pkg/types"
 )
 
@@ -175,6 +178,21 @@ func TestMaxRowsAndErrors(t *testing.T) {
 	}
 }
 
+func TestTimeoutAppliesToQueryNotLoading(t *testing.T) {
+	ws, cwd := setup(t)
+	// 极小的 --timeout：载入照常完成（否则不会出现表），失败归因于查询阶段
+	_, err := Run(context.Background(), Options{SQL: `SELECT COUNT(*) AS n FROM d`, Roots: []string{ws, cwd},
+		Sandbox: true, Sources: map[string]string{"d": filepath.Join(cwd, "local.json")},
+		LoadMode: "stream", Timeout: time.Nanosecond, MaxRows: 10})
+	var te *types.Error
+	if !errors.As(err, &te) || !strings.Contains(te.Message, "query timeout") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(te.Message, "载入超时") {
+		t.Fatalf("载入不应受 --timeout 限制: %v", err)
+	}
+}
+
 func TestEmptyResultIsNonNil(t *testing.T) {
 	ws, cwd := setup(t)
 	r := mustRun(t, opts(ws, cwd, `SELECT region FROM "local.json" WHERE amount > 1000`))
@@ -189,6 +207,34 @@ func TestCanceledContext(t *testing.T) {
 	cancel()
 	if _, err := Run(ctx, opts(ws, cwd, `SELECT * FROM "local.json"`)); err == nil {
 		t.Fatal("canceled context ignored")
+	}
+}
+
+func TestMemoryGuardBlocksOversizedLoad(t *testing.T) {
+	ws, cwd := setup(t)
+	base := func(max *uint64) Options {
+		return Options{SQL: `SELECT COUNT(*) AS n FROM d`, Roots: []string{ws, cwd}, Sandbox: true,
+			Sources: map[string]string{"d": filepath.Join(cwd, "local.json")}, MaxMemory: max}
+	}
+	tiny := uint64(10)
+	_, err := Run(context.Background(), base(&tiny))
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeExec || !strings.Contains(te.Message, "内存不足") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(te.Detail, "13 倍") || !strings.Contains(te.Hint, "--max-memory 0") {
+		t.Fatalf("not actionable: %q / %q", te.Detail, te.Hint)
+	}
+	// --max-memory 0 关闭检查后应正常执行
+	off := uint64(0)
+	r, err := Run(context.Background(), base(&off))
+	if err != nil || r.RowCount != 1 {
+		t.Fatalf("guard off: %+v %v", r, err)
+	}
+	// 预算充足时也放行
+	big := uint64(1 << 30)
+	if _, err := Run(context.Background(), base(&big)); err != nil {
+		t.Fatalf("enough memory: %v", err)
 	}
 }
 
@@ -272,5 +318,157 @@ func TestLookupBindsDatasetNamesInFromAndJoinOnly(t *testing.T) {
 	_, binds, _ = Rewrite(o)
 	if len(binds) != 1 || binds[0].Path != other {
 		t.Fatalf("binds = %+v", binds)
+	}
+}
+
+const mixedJSON = `[
+ {"id":1,"金额":10,"比率":0.5,"名称":"甲","flag":true,"ext":{"a":1},"tags":[1,2]},
+ {"id":2,"金额":20.5,"比率":1,"名称":"乙","flag":false,"ext":{"b":2},"tags":[]},
+ {"id":3,"金额":30,"比率":2.5,"名称":"丙","flag":true,"ext":null,"tags":[3]},
+ {"id":4,"金额":null,"名称":"丁"}
+]`
+
+func TestStreamModeMatchesFullMode(t *testing.T) {
+	ws, cwd := setup(t)
+	p := filepath.Join(cwd, "mixed.json")
+	if err := os.WriteFile(p, []byte(mixedJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	queries := []string{
+		`SELECT * FROM d ORDER BY id`,
+		`SELECT 名称, 金额, 比率, flag, ext, tags FROM d ORDER BY id`,
+		`SELECT COUNT(*) AS n, SUM(金额) AS s, AVG(比率) AS a FROM d`,
+		`SELECT id FROM d WHERE 金额 > 25`,    // 数值比较（流式模式也必须按数值比较）
+		`SELECT id FROM d WHERE 金额 IS NULL`, // 空值
+		`SELECT id, flag, tags FROM d WHERE ext IS NOT NULL ORDER BY id`,
+	}
+	var full []string
+	for i, sql := range queries {
+		run := func(mode string) string {
+			r, err := Run(context.Background(), Options{SQL: sql, Roots: []string{ws, cwd}, Sandbox: true,
+				Sources: map[string]string{"d": p}, LoadMode: mode, MaxRows: 100})
+			if err != nil {
+				t.Fatalf("mode=%s sql=%s: %v", mode, sql, err)
+			}
+			b, err := json.Marshal(struct {
+				Cols []string
+				Rows []types.Row
+				N    int
+			}{r.Columns, r.Rows, r.RowCount})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(b)
+		}
+		got, want := run("stream"), run("full")
+		if got != want {
+			t.Errorf("query %d 结果不一致 | stream: %s | full: %s", i, got, want)
+		}
+		full = append(full, want)
+	}
+	// 列顺序按首次出现，且类型推断与整块解析一致
+	if !strings.Contains(full[0], `["id","金额","比率","名称","flag","ext","tags"]`) {
+		t.Fatalf("列顺序不符：%s", full[0])
+	}
+	r, err := Run(context.Background(), Options{SQL: `SELECT id FROM d WHERE 金额 > 25`, Roots: []string{ws, cwd},
+		Sandbox: true, Sources: map[string]string{"d": p}, LoadMode: "stream", MaxRows: 10})
+	if err != nil || r.RowCount != 1 {
+		t.Fatalf("流式模式数值比较错误：%+v %v", r, err)
+	}
+	if v, _ := r.Rows[0].Get("id"); v != int64(3) {
+		t.Fatalf("id = %#v", v)
+	}
+}
+
+func TestParseLoadModeAndResolve(t *testing.T) {
+	for _, s := range []string{"", "auto", "STREAM", " stream "} {
+		if _, err := ParseLoadMode(s); err != nil {
+			t.Errorf("ParseLoadMode(%q) = %v", s, err)
+		}
+	}
+	for _, s := range []string{"fast", "1", "full "} {
+		_, err := ParseLoadMode(s)
+		var te *types.Error
+		if s == "full " {
+			if err != nil {
+				t.Errorf("ParseLoadMode(%q) should trim: %v", s, err)
+			}
+			continue
+		}
+		if !errors.As(err, &te) || te.Code != types.CodeUsage || te.Hint == "" {
+			t.Errorf("ParseLoadMode(%q) err = %v", s, err)
+		}
+	}
+
+	big, small := uint64(64<<20), uint64(1<<20)
+	none := memguard.Memory{}
+	cases := []struct {
+		mode string
+		size uint64
+		mem  memguard.Memory
+		want LoadMode
+	}{
+		{"stream", small, none, LoadStream},
+		{"full", big, none, LoadFull},
+		{"auto", small, none, LoadFull},
+		{"auto", big, none, LoadStream},
+		{"auto", small, memguard.Memory{Available: 1 << 20, Source: "t"}, LoadStream}, // 预算不足 -> 转流式
+		{"auto", small, memguard.Memory{Available: 1 << 30, Source: "t"}, LoadFull},
+	}
+	for _, c := range cases {
+		if got := resolveMode(c.mode, c.size, c.mem); got != c.want {
+			t.Errorf("resolveMode(%s, %d) = %s, want %s", c.mode, c.size, got, c.want)
+		}
+	}
+	if peakFactor(LoadStream) >= peakFactor(LoadFull) {
+		t.Fatal("流式倍率应当更低")
+	}
+}
+
+func TestStreamModeRejectsBadInput(t *testing.T) {
+	ws, cwd := setup(t)
+	files := map[string]string{
+		"object.json":    `{"a":1}`,
+		"scalar.json":    `[1,2]`,
+		"trailing.json":  `[{"a":1}] []`,
+		"truncated.json": `[{"a":1},`,
+		"notjson.json":   `nope`,
+	}
+	for name, body := range files {
+		p := filepath.Join(cwd, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, mode := range []string{"stream", "full"} {
+			_, err := Run(context.Background(), Options{SQL: `SELECT COUNT(*) AS n FROM d`, Roots: []string{ws, cwd},
+				Sandbox: true, Sources: map[string]string{"d": p}, LoadMode: mode, MaxRows: 10})
+			var te *types.Error
+			if !errors.As(err, &te) || te.Code != types.CodeExec {
+				t.Errorf("%s/%s: err = %v", name, mode, err)
+			}
+		}
+	}
+}
+
+func TestStreamModeHonorsCancellation(t *testing.T) {
+	ws, cwd := setup(t)
+	p := filepath.Join(cwd, "rows.json")
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i := 0; i < 2000; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"a":%d,"b":"x"}`, i)
+	}
+	sb.WriteString("]")
+	if err := os.WriteFile(p, []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Run(ctx, Options{SQL: `SELECT COUNT(*) AS n FROM d`, Roots: []string{ws, cwd}, Sandbox: true,
+		Sources: map[string]string{"d": p}, LoadMode: "stream", MaxRows: 10}); err == nil {
+		t.Fatal("已取消的 context 应当中断流式载入")
 	}
 }

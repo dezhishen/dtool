@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,6 +243,39 @@ func TestDatasetsAreIndependentOfActions(t *testing.T) {
 	}
 	if _, err := env.Rec.Resolve("dataset:data"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConvertMemoryGuard(t *testing.T) {
+	env, dir := newEnv(t)
+	xlsx := writeXlsx(t, dir)
+
+	tiny := uint64(1024)
+	env.MaxMemory = &tiny
+	_, err := env.Convert(ConvertParams{Input: xlsx}, "")
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeExec || !strings.Contains(te.Message, "Excel 文件") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(te.Detail, "260 倍") || !strings.Contains(te.Hint, "--max-memory 0") {
+		t.Fatalf("not actionable: %q / %q", te.Detail, te.Hint)
+	}
+	// --load-mode 只对 query 生效，发给 convert 是误导
+	if strings.Contains(te.Hint, "--load-mode") {
+		t.Fatalf("convert 不应建议 --load-mode: %q", te.Hint)
+	}
+	if !strings.Contains(te.Hint, "拆分") {
+		t.Fatalf("convert 应建议拆分输入: %q", te.Hint)
+	}
+	failed, _, err := env.Rec.List(action.Filter{Status: action.StatusFailed})
+	if err != nil || len(failed) == 0 {
+		t.Fatalf("内存不足也应记录失败的 Action：%v %v", failed, err)
+	}
+
+	off := uint64(0)
+	env.MaxMemory = &off
+	if _, err := env.Convert(ConvertParams{Input: xlsx, Name: "ok"}, ""); err != nil {
+		t.Fatalf("guard off: %v", err)
 	}
 }
 

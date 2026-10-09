@@ -44,6 +44,68 @@ dtool version --deps       # 附带编译进二进制的依赖模块及版本
 
 [examples/](examples/README.md) 提供 4 个可直接运行的示例（销售报表、人员分析、脏数据处理、pipeline 与 Action 协作），含数据源文件：`make build && bash examples/run-all.sh`。
 
+## 装入方式与大数据量
+
+JSON → 内存 SQLite 有两种装入方式，`--load-mode` 可选 `auto`（默认）/ `stream` / `full`：
+
+| 方式 | 峰值内存 | 相对速度 | 适用 |
+|------|----------|----------|------|
+| `full` 整块解析 | ≈ 文件大小 × 13 | 快 | 小文件（<32MB） |
+| `stream` 流式两遍 | ≈ 文件大小 × 2 | 略慢（解析两遍） | 大文件、低内存 |
+
+`auto` 按实际文件大小自适应：**≥32MB 自动转流式**；若探测到可用内存不足以整块解析（×13 超预算），也自动转流式。
+
+1 核 2GB 实测（同一台机器，限制为 cgroup 2GB + 单核）：
+
+| 数据 | 旧版（只有整块解析） | `auto` |
+|------|----------------------|--------|
+| 17MB / 10 万行 | 3.2s，267MB | 2.4s，275MB（走 full） |
+| 104MB / 100 万行日志 | 16.5s，1543MB | 19s，**157MB**（走 stream） |
+| 168MB / 100 万行订单 | **被 OOM 杀掉** | 29s，**183MB** |
+| 456MB / 500 万行 | **被 OOM 杀掉** | 1:29，**604MB** |
+
+流式模式下内存不再随文件线性暴涨，限制主要变成**耗时**。`--timeout` 只约束**查询阶段**（默认 60s）；载入是本地的读写与 CPU 工作，不受它限制，由内存看门狗和 Ctrl+C 兜底。
+
+```bash
+dtool query --load-mode stream --source d=big.json --sql 'SELECT ...'
+dtool query --load-mode full   --sql '...'    # 内存充足时求快
+dtool query --timeout 10m      --sql '...'    # 查询本身很重时再调大（默认 60s）
+```
+
+### Excel 输入的现实边界
+
+`convert` 用 excelize 整表解析，**没有流式开关**，峰值内存 ≈ xlsx 文件大小 × 260（xlsx 是压缩容器，解压后膨胀很大）：
+
+| xlsx 大小 | 预估峰值 | 1 核 2GB |
+|-----------|----------|----------|
+| 1MB | 260MB | 可以 |
+| 6MB | 1.6GB | 接近上限 |
+| 7.7MB / 15 万行 × 6 列 | 1.9GB | **载入前被拦下**（`--max-memory 0` 强跑实测峰值 1.89GB） |
+
+大表建议先拆成多个 xlsx 分别导入，或先转成 JSON 再用 `dtool query`（走 `--load-mode stream`，峰值降到 ×2）。
+
+## 内存不足时的行为
+
+为避免「进程被内核静默杀掉、用户不知道发生了什么」，dtool 会：
+
+- **载入前预估**：按所选装入方式的倍率推算峰值内存，超出可用预算时直接失败，并给出数字与处置建议。建议分场景给：`query` 会推荐 `--load-mode stream`，`convert`（Excel 无流式开关）只推荐拆分输入，两者都保留 `--max-memory 0` 强制运行口；
+- **运行期看门狗**：载入/查询期间监控本进程内存，逼近预算时以普通错误中止，并写入一条 `failed` 的 Action；
+- **载入进度**：数据源 ≥8MB 时向 stderr 打印「载入 xx（大小，装入方式，预计需约 xx 内存）...」，即使进程被强杀也能看出卡在哪里。
+
+自动探测 cgroup v2/v1 内存限制与系统可用内存（macOS/Windows 上需显式指定）。可用全局参数覆盖：
+
+```bash
+dtool query --max-memory 4G --sql '...'   # 显式预算
+dtool query --max-memory 0  --sql '...'   # 关闭检查（内存不足时仍会被系统杀掉）
+DTOOL_MAX_MEMORY=2G dtool pipeline ...    # 环境变量，适合容器/CI
+```
+
+配置文件同样支持：
+
+```yaml
+load_mode: auto      # auto / stream / full
+```
+
 ## 检查更新与升级
 
 ```bash

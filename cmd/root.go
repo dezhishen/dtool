@@ -12,7 +12,9 @@ import (
 	"github.com/dezhishen/dtool/internal/action"
 	"github.com/dezhishen/dtool/internal/buildinfo"
 	"github.com/dezhishen/dtool/internal/config"
+	"github.com/dezhishen/dtool/internal/memguard"
 	"github.com/dezhishen/dtool/internal/pipeline"
+	"github.com/dezhishen/dtool/internal/query"
 	"github.com/dezhishen/dtool/internal/workspace"
 	"github.com/dezhishen/dtool/pkg/types"
 	"github.com/spf13/cobra"
@@ -26,7 +28,12 @@ type globalFlags struct {
 	from        string
 	previewRows int
 	noRecord    bool
+	maxMemory   string
+	loadMode    string
 }
+
+// parsedMaxMemory 为 --max-memory 的解析结果：nil 表示自动探测。
+var parsedMaxMemory *uint64
 
 var g globalFlags
 
@@ -53,6 +60,8 @@ func Execute(version string) error {
 	pf.StringVar(&g.from, "from", "", "派生来源：action:<id> 或 latest:<type>（仅记录血缘）")
 	pf.IntVar(&g.previewRows, "preview-rows", 20, "Action 预览行数")
 	pf.BoolVar(&g.noRecord, "no-record", false, "跳过 Action 记录")
+	pf.StringVar(&g.maxMemory, "max-memory", "", "内存预算（如 1.5G）；默认自动探测 cgroup/系统可用内存，0 表示关闭检查")
+	pf.StringVar(&g.loadMode, "load-mode", "auto", "JSON 装入方式：auto 按文件大小自适应 / stream 流式（省内存）/ full 整块解析（快）")
 
 	var checkUpdate, pre bool
 	root.Flags().BoolVar(&checkUpdate, "update", false, "检查是否有新版本（不安装；配合 --pre 包含预览版）")
@@ -111,7 +120,7 @@ func newEnv(ctx context.Context) (*pipeline.Env, error) {
 	return &pipeline.Env{
 		Ctx: ctx, WS: ws, Rec: &action.Recorder{WS: ws},
 		Meta:    action.Metadata{Tags: tags, Notes: g.notes},
-		Preview: g.previewRows, NoRecord: g.noRecord, Command: commandLine(),
+		Preview: g.previewRows, NoRecord: g.noRecord, Command: commandLine(), MaxMemory: parsedMaxMemory, LoadMode: g.loadMode,
 	}, nil
 }
 
@@ -138,6 +147,23 @@ func requireFlags(c *cobra.Command, names ...string) error {
 
 func loadConfig(c *cobra.Command, _ []string) error {
 	cfgFont = ""
+	if g.loadMode == "" {
+		g.loadMode = "auto"
+	}
+	if g.loadMode != "" {
+		m, err := query.ParseLoadMode(g.loadMode)
+		if err != nil {
+			return err
+		}
+		g.loadMode = string(m)
+	}
+	if g.maxMemory != "" {
+		n, err := memguard.ParseBytes(g.maxMemory)
+		if err != nil {
+			return err
+		}
+		parsedMaxMemory = &n
+	}
 	if g.config == "" {
 		return nil
 	}
@@ -146,6 +172,9 @@ func loadConfig(c *cobra.Command, _ []string) error {
 		return err
 	}
 	cfgFont = cfg.Font
+	if cfg.LoadMode != "" && !c.Flags().Changed("load-mode") {
+		g.loadMode = cfg.LoadMode
+	}
 	if cfg.Workspace != "" && !c.Flags().Changed("workspace") {
 		g.workspace = cfg.Workspace
 	}

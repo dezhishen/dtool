@@ -42,14 +42,14 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 |------|------|
 | `convert --input f.xlsx [--sheet S] [--name N]` | 仅 `.xlsx`；`--name` 缺省取文件名（指定 sheet 时追加 `_<sheet>`）；输出含 `data_file`/`schema_file`/`updated_at`/`warnings` |
 | `datasets list \| show <name> \| delete <name>` | 查阅/删除数据集；回答"有哪些数据、长什么样"用这个 |
-| `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
+| `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y；y 必须是数值列 |
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running） |
 | `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex` | `annotate` 把用户口径/备注写进 Action |
 | `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身，见文末 |
 
-通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`-c config.yaml`。
+通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
 
 ## SQL 规则（最常踩坑）
 
@@ -88,6 +88,19 @@ font: /usr/share/fonts/truetype/arphic/uming.ttc   # 相对路径相对配置文
 workspace: .dtool
 preview_rows: 20
 ```
+
+## 装入方式与大数据的现实边界
+
+JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `stream` / `full`。
+
+- `auto` 按文件大小自适应：**≥32MB 走流式**；可用内存不够整块解析时也自动转流式。所以一般情况下不用管它。
+- 峰值内存：`full` ≈ 文件大小 × 13；`stream` ≈ ×2。
+- 1 核 2GB 下实测（默认 `auto`）：10 万行 2.4s；100 万行 19–29s；500 万行 1:29、604MB。默认参数即可，不必再调 `--timeout`。
+- **Excel（`convert`）没有流式开关**：峰值 ≈ xlsx 文件大小 × 260（实测），2GB 下 6MB 左右就见顶。15 万行 / 7.7MB 的 xlsx 预估 1.9GB 会被拦下；`--max-memory 0` 强跑实测峰值 1.89GB，正好不炸。大表请拆成多个 xlsx，或先转成 JSON 再 `query`（可走 `--load-mode stream`）。
+- `--timeout` 只约束**查询阶段**（默认 60s），载入耗时不计入。若内存充足、只想要速度，可用 `--load-mode full`（只解析一遍，更快）。
+- 内存不足时会**快速失败并说明原因**（含「预计需 xx、可用 xx」与 `--max-memory 0` 退出口），不会静默被杀；这类失败同样留下 `failed` 的 Action。建议按场景给：`query` 推荐 `--load-mode stream`，`convert` 只建议拆分输入——它没有 `--load-mode`，照抄那个参数会白试一轮。
+- 看到 stderr 的「载入 xxx.json（…，流式解析，预计需约 xx 内存）...」说明正在载入；若进程随后消失，就是内存不够。
+- 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
 
 ## 注意事项
 

@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/dezhishen/dtool/internal/memguard"
 	"github.com/dezhishen/dtool/pkg/types"
 	_ "modernc.org/sqlite"
 )
@@ -24,36 +26,79 @@ type Options struct {
 	Sandbox bool
 	MaxRows int
 	Timeout time.Duration
-	Lookup  func(name string) (path string, ok bool) // 数据集名 -> 数据文件，可为 nil
+	// MaxMemory 内存预算：nil 表示自动探测（cgroup / 系统可用内存）；指向 0 表示关闭检查。
+	MaxMemory *uint64
+	// LoadMode 决定 JSON → SQLite 的装入方式："" 或 auto 按文件大小自适应，stream 流式，full 整块解析。
+	LoadMode string
+	Lookup   func(name string) (path string, ok bool) // 数据集名 -> 数据文件，可为 nil
 }
 
 var errMaxRows = errors.New("max rows exceeded")
 
+// peakFactor 为各装入方式的实测峰值倍率（见 README）：
+// full 整块解析约 13 倍文件大小；stream 逐行装入只需 ~1.3 倍，取 2 倍留余量。
+const (
+	fullPeakFactor   = 13
+	streamPeakFactor = 2
+	// autoStreamSize：auto 模式下达到该体积即改用流式。
+	autoStreamSize = 32 << 20
+)
+
+// progressMinSize 可在测试中替换。
+var progressMinSize = uint64(memguard.DefaultProgressMinSize)
+
 // Run 重写表引用，把用到的 JSON 文件载入内存 SQLite（modernc，纯 Go）后执行查询。
+// 载入前会按可用内存做预估，载入/查询期间有内存看门狗，超限时以普通错误退出并给出原因。
 func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 	sqlText, binds, err := Rewrite(o)
 	if err != nil {
 		return nil, err
 	}
-	if o.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, o.Timeout)
-		defer cancel()
+	// 载入前先估算内存：内存不足时给出可读的原因，而不是被内核 OOM 直接杀掉
+	mem := memguard.Budget(o.MaxMemory)
+	modes := make([]LoadMode, len(binds))
+	var total, need uint64
+	for i, b := range binds {
+		size := memguard.SizeOf(b.Path)
+		modes[i] = resolveMode(o.LoadMode, size, mem)
+		total += size
+		need += size * uint64(peakFactor(modes[i]))
 	}
+	if err := memguard.CheckNeed("数据源", total, need, estimateNote(modes), mem, memguard.HintLoadMode); err != nil {
+		return nil, err
+	}
+	if mem.Available > 0 {
+		// 软上限：接近预算时 GC 更积极，尽量不撞上 cgroup 硬限制
+		defer debug.SetMemoryLimit(-1)
+		debug.SetMemoryLimit(int64(mem.Available))
+	}
+	ctx, stopWatch := memguard.Watch(ctx, mem.Available)
+	defer stopWatch()
+
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1) // 内存库按连接隔离
-	for _, b := range binds {
-		if err := loadTable(ctx, db, b); err != nil {
-			return nil, wrapErr(ctx, o, err)
+	for i, b := range binds {
+		size := memguard.SizeOf(b.Path)
+		memguard.Progress(os.Stderr, progressMinSize, filepath.Base(b.Path), size, size*uint64(peakFactor(modes[i])), modeNote(modes[i]))
+		if err := loadTable(ctx, db, b, modes[i]); err != nil {
+			return nil, wrapErr(ctx, o, fmt.Errorf("载入 %s: %w", filepath.Base(b.Path), err), "load")
 		}
 	}
-	res, err := collect(ctx, db, sqlText, o.MaxRows)
+	// --timeout 只约束查询：载入是本地的读写与 CPU 密集工作，大文件可能远超 60s，
+	// 把它算进去会让默认值变成陷阱（载入本身由内存看门狗与 Ctrl+C 兜底）。
+	qctx := ctx
+	if o.Timeout > 0 {
+		var cancel context.CancelFunc
+		qctx, cancel = context.WithTimeout(ctx, o.Timeout)
+		defer cancel()
+	}
+	res, err := collect(qctx, db, sqlText, o.MaxRows)
 	if err != nil {
-		return nil, wrapErr(ctx, o, err)
+		return nil, wrapErr(qctx, o, err, phaseQuery)
 	}
 	return res, nil
 }
@@ -100,11 +145,15 @@ func collect(ctx context.Context, db *sql.DB, sqlText string, max int) (*types.Q
 	return out, nil
 }
 
-func wrapErr(ctx context.Context, o Options, err error) error {
+const phaseQuery = "query"
+
+func wrapErr(ctx context.Context, o Options, err error, phase string) error {
 	var te *types.Error
 	switch {
 	case errors.As(err, &te):
 		return te
+	case memguard.PressureError(ctx) != nil:
+		return memguard.PressureError(ctx)
 	case errors.Is(err, errMaxRows):
 		return types.Errorf(types.CodeExec, "result exceeds --max-rows (%d)", o.MaxRows).
 			WithHint("在 SQL 中加 LIMIT，或调大 --max-rows")
