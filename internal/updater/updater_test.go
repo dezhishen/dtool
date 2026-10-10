@@ -25,16 +25,19 @@ import (
 	"github.com/dezhishen/dtool/pkg/types"
 )
 
-func tarGz(t *testing.T, binName string, content []byte) []byte {
+const skillsDoc = "SKILLS-DOC"
+
+type namedFile struct {
+	name string
+	data []byte
+}
+
+func tarGzFiles(t *testing.T, files ...namedFile) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	// 与 build-release.sh 一致：条目带 ./ 前缀，并含无关文件
-	for _, f := range []struct {
-		name string
-		data []byte
-	}{{"./README.md", []byte("readme")}, {"./" + binName, content}} {
+	for _, f := range files {
 		tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o755, Size: int64(len(f.data)), Typeflag: tar.TypeReg})
 		tw.Write(f.data)
 	}
@@ -43,12 +46,31 @@ func tarGz(t *testing.T, binName string, content []byte) []byte {
 	return buf.Bytes()
 }
 
+// tarGz 与 build-release.sh 的归档布局一致：条目带 ./ 前缀，且含 README/skills.md 等非二进制文件。
+func tarGz(t *testing.T, binName string, content []byte) []byte {
+	t.Helper()
+	return tarGzFiles(t,
+		namedFile{"./README.md", []byte("readme")},
+		namedFile{"./" + skillsName, []byte(skillsDoc)},
+		namedFile{"./" + binName, content},
+	)
+}
+
+// tarGzBinaryOnly 模拟不含 skills.md 的归档（裁剪过的旧发布）。
+func tarGzBinaryOnly(t *testing.T, binName string, content []byte) []byte {
+	t.Helper()
+	return tarGzFiles(t, namedFile{"./" + binName, content})
+}
+
 func zipOf(t *testing.T, binName string, content []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	w, _ := zw.Create(binName)
-	w.Write(content)
+	// Windows 归档同样带 skills.md（build-release.sh 用的是同一份文件列表）
+	for _, f := range []namedFile{{skillsName, []byte(skillsDoc)}, {binName, content}} {
+		w, _ := zw.Create(f.name)
+		w.Write(f.data)
+	}
 	zw.Close()
 	return buf.Bytes()
 }
@@ -725,5 +747,125 @@ func TestUpgradeExplicitDevBuildID(t *testing.T) {
 	res, err := u.Upgrade(context.Background(), UpgradeOptions{Version: "dev-38043572835"})
 	if err != nil || !res.Upgraded {
 		t.Fatalf("指定当前滚动构建应能升级：%+v %v", res, err)
+	}
+}
+
+// --skills：把该版本的 skills.md 一并取出来（从**已校验**的归档里取，不额外走网络）。
+func TestUpgradeWritesSkills(t *testing.T) {
+	u := fakeGitHub(t, []rel{release(t, "v1.1.0", "linux", "NEW")})
+	u.Current, u.Exe = "1.0.0", installedExe(t, "OLD")
+	u.Verify = nil
+
+	// 裸 --skills（NoOptDefVal="."）→ 当前目录
+	dir := t.TempDir()
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+
+	res, err := u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Upgraded || !res.SkillsChanged || !filepath.IsAbs(res.SkillsPath) {
+		t.Fatalf("res = %+v", res)
+	}
+	if read(t, filepath.Join(dir, "skills.md")) != skillsDoc {
+		t.Fatalf("没写到当前目录：%s = %q", res.SkillsPath, read(t, res.SkillsPath))
+	}
+	if !strings.Contains(res.Message, "skills.md 已更新") {
+		t.Fatalf("message = %q", res.Message)
+	}
+
+	// 已经是最新版本：不动二进制，手册仍按请求写出；内容一样 → changed=false（脚本可据它决定要不要重载）
+	u.Current = "1.1.0"
+	u.Verify = func(string, string) error { t.Fatal("must not install"); return nil }
+	res, err = u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Upgraded || res.SkillsChanged || !strings.Contains(res.Message, "无需升级") {
+		t.Fatalf("res = %+v", res)
+	}
+	if !strings.Contains(res.Message, "内容无变化") {
+		t.Fatalf("message = %q", res.Message)
+	}
+
+	// 本地手册被改过（或版本较旧）→ 应当重新写回并标 changed
+	if err := os.WriteFile(filepath.Join(dir, "skills.md"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: dir})
+	if err != nil || !res.SkillsChanged {
+		t.Fatalf("res = %+v %v", res, err)
+	}
+	if read(t, filepath.Join(dir, "skills.md")) != skillsDoc {
+		t.Fatal("没有覆盖旧的 skills.md")
+	}
+}
+
+// --skills 的取值规则：目录（已存在 / 带斜杠 / 无 .md 后缀）补 skills.md，明确的 .md 当文件。
+func TestSkillsTargetRules(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ in, want string }{
+		{dir, filepath.Join(dir, "skills.md")},
+		{dir + "/", filepath.Join(dir, "skills.md")},
+		{filepath.Join(dir, "docs"), filepath.Join(dir, "docs", "skills.md")},
+		{filepath.Join(dir, "docs", "agent.md"), filepath.Join(dir, "docs", "agent.md")},
+	} {
+		got, err := skillsTarget(c.in)
+		if err != nil || got != c.want {
+			t.Errorf("skillsTarget(%q) = %q, %v；期望 %q", c.in, got, err, c.want)
+		}
+	}
+	if _, err := skillsTarget("   "); err == nil {
+		t.Error("空路径应报用法错误")
+	}
+	if st, err := os.Stat(filepath.Join(dir, "docs")); err != nil || !st.IsDir() {
+		t.Fatalf("无 .md 后缀的路径应被创建为目录：%v", err)
+	}
+}
+
+// 归档里没有 skills.md（裁剪过的旧发布）：报可读错误，且**不动二进制**（先写手册、后换二进制）。
+func TestUpgradeSkillsMissingInArchive(t *testing.T) {
+	u := fakeGitHub(t, []rel{release(t, "v1.1.0", "linux", "NEW", func(r *rel) {
+		for n := range r.assets {
+			if strings.HasPrefix(n, "dtool_") {
+				r.assets[n] = tarGzBinaryOnly(t, "dtool", []byte("NEW"))
+				sum := sha256.Sum256(r.assets[n])
+				r.assets["checksums.txt"] = []byte(hex.EncodeToString(sum[:]) + "  ./" + n + "\n")
+			}
+		}
+	})})
+	u.Current, u.Exe = "1.0.0", installedExe(t, "OLD")
+	u.Verify = func(string, string) error { t.Fatal("must not install"); return nil }
+
+	if _, err := u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: t.TempDir()}); err == nil {
+		t.Fatal("归档缺 skills.md 时应报错")
+	}
+	if read(t, u.Exe) != "OLD" {
+		t.Fatal("binary modified")
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(u.Exe)); len(entries) != 1 {
+		t.Fatalf("leftover files: %v", entries)
+	}
+}
+
+// Windows 走 zip，skills.md 同样要能取出来。
+func TestUpgradeSkillsFromZip(t *testing.T) {
+	u := fakeGitHub(t, []rel{release(t, "v1.1.0", "windows", "NEW-EXE")})
+	u.OS = "windows"
+	dir := t.TempDir()
+	u.Current, u.Exe = "1.0.0", filepath.Join(dir, "dtool.exe")
+	if err := os.WriteFile(u.Exe, []byte("OLD-EXE"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	u.Verify = nil
+	if _, err := u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: filepath.Join(dir, "docs")}); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, filepath.Join(dir, "docs", "skills.md")) != skillsDoc {
+		t.Fatal("zip 归档里的 skills.md 没被取出")
 	}
 }

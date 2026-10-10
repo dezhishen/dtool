@@ -31,6 +31,9 @@ const (
 	maxArchive    = 200 << 20
 	maxBinary     = 400 << 20
 	checksumsName = "checksums.txt"
+	// skillsName：随发布归档一起分发的 agent 手册（build-release.sh 把它打进每个平台归档）。
+	// `upgrade --skills` 直接从**已校验过**的归档里取它，不额外走网络。
+	skillsName = "skills.md"
 	// defaultDevTag：滚动 dev 发布的 tag（`dtool upgrade --channel dev` 的目标）。
 	defaultDevTag = "dev"
 	// devBuildAsset：dev 发布里记录构建号的小文件（见 CI 的 dev-build 任务）。
@@ -126,6 +129,10 @@ type UpgradeOptions struct {
 	Version string  // 指定版本；空则取最新。dev 渠道可写 dev / dev-<run id>
 	Pre     bool    // 兼容旧参数：等价于 Channel=preview
 	Channel Channel // stable / preview / dev；空按 Pre 推断，再默认 stable
+	// SkillsPath：把目标版本的 skills.md 另存到哪里（空 = 不保存）。取值可以是目录
+	// （写成 <目录>/skills.md，目录不存在则创建）、明确以 .md 结尾的文件路径，
+	// 或 "."（当前目录）。见 skillsTarget。
+	SkillsPath string
 }
 
 type UpgradeResult struct {
@@ -135,7 +142,10 @@ type UpgradeResult struct {
 	To         string `json:"to"`
 	Path       string `json:"path,omitempty"`
 	ReleaseURL string `json:"release_url,omitempty"`
-	Message    string `json:"message"`
+	// SkillsPath：skills.md 实际写入的位置（绝对路径）；未请求时为 "-" 省略。
+	SkillsPath    string `json:"skills_path,omitempty"`
+	SkillsChanged bool   `json:"skills_changed,omitempty"`
+	Message       string `json:"message"`
 }
 
 func (u *Updater) get(ctx context.Context, url string, auth bool) (*http.Response, error) {
@@ -423,14 +433,20 @@ func expectedSum(sums []byte, name string) (string, bool) {
 }
 
 func extractBinary(archive []byte, name, binName string) ([]byte, error) {
-	isBin := func(n string) bool { return path.Base(path.Clean(strings.ReplaceAll(n, "\\", "/"))) == binName }
+	return extractFile(archive, name, binName)
+}
+
+// extractFile 从归档里取出指定文件（按 basename 匹配，兼容 tar 的 ./ 前缀、目录层级
+// 与 Windows 的 \\ 分隔符）。只接受**已校验过 sha256** 的归档内容。
+func extractFile(archive []byte, name, want string) ([]byte, error) {
+	isWant := func(n string) bool { return path.Base(path.Clean(strings.ReplaceAll(n, "\\", "/"))) == want }
 	if strings.HasSuffix(name, ".zip") {
 		zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 		if err != nil {
 			return nil, err
 		}
 		for _, f := range zr.File {
-			if f.FileInfo().IsDir() || !isBin(f.Name) {
+			if f.FileInfo().IsDir() || !isWant(f.Name) {
 				continue
 			}
 			rc, err := f.Open()
@@ -440,7 +456,7 @@ func extractBinary(archive []byte, name, binName string) ([]byte, error) {
 			defer rc.Close()
 			return readLimited(rc)
 		}
-		return nil, fmt.Errorf("%s not found in %s", binName, name)
+		return nil, fmt.Errorf("%s not found in %s", want, name)
 	}
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
@@ -451,15 +467,144 @@ func extractBinary(archive []byte, name, binName string) ([]byte, error) {
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil, fmt.Errorf("%s not found in %s", binName, name)
+			return nil, fmt.Errorf("%s not found in %s", want, name)
 		}
 		if err != nil {
 			return nil, err
 		}
-		if h.Typeflag == tar.TypeReg && isBin(h.Name) {
+		if h.Typeflag == tar.TypeReg && isWant(h.Name) {
 			return readLimited(tr)
 		}
 	}
+}
+
+// skillsTarget 把 --skills 的取值解析成「要写到哪个文件」。
+// 目录（已存在的目录 / 以分隔符结尾 / 没有 .md 后缀）会补上 skills.md；"." 就是当前目录。
+func skillsTarget(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return "", types.Errorf(types.CodeUsage, "--skills 需要一个路径").
+			WithHint("写 --skills 表示当前目录，或 --skills=<目录|文件.md>")
+	}
+	isDir := false
+	switch {
+	case strings.HasSuffix(p, "/") || strings.HasSuffix(p, string(os.PathSeparator)):
+		isDir = true
+	case !strings.EqualFold(filepath.Ext(p), ".md"):
+		// 没有 .md 后缀就当目录：--skills=docs → docs/skills.md
+		isDir = true
+	default:
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			isDir = true
+		}
+	}
+	if !isDir {
+		return p, nil
+	}
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		return "", types.Errorf(types.CodeExec, "创建目录 %s 失败：%v", p, err).
+			WithHint("--skills 的路径要对当前用户可写")
+	}
+	return filepath.Join(p, skillsName), nil
+}
+
+// writeSkills 从归档里取出 skills.md 写到 raw 指定的位置，返回绝对路径与内容是否变化。
+func (u *Updater) writeSkills(archive []byte, archiveName, raw string) (string, bool, error) {
+	dest, err := skillsTarget(raw)
+	if err != nil {
+		return "", false, err
+	}
+	data, err := extractFile(archive, archiveName, skillsName)
+	if err != nil {
+		return "", false, types.Errorf(types.CodeExec, "%s 里没有 %s", archiveName, skillsName).
+			WithHint("这份发布的归档不含 agent 手册；从 Releases 页面手动下载即可")
+	}
+	old, readErr := os.ReadFile(dest)
+	changed := readErr != nil || !bytes.Equal(old, data)
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		return "", false, types.Errorf(types.CodeExec, "写入 %s 失败：%v", dest, err).
+			WithHint("--skills 的路径要对当前用户可写")
+	}
+	abs, err := filepath.Abs(dest)
+	if err != nil {
+		abs = dest
+	}
+	return abs, changed, nil
+}
+
+// skillsState 描述手册内容有没有变（幂等脚本据此判断要不要重新加载 agent 手册）。
+func skillsState(changed bool) string {
+	if changed {
+		return "已更新"
+	}
+	return "内容无变化"
+}
+
+// skillsNote 拼出追加到 message 末尾的说明（没取手册时为空串）。单独一个函数是因为
+// 正常升级路径要先取手册、最后才组装 message。
+func skillsNote(res *UpgradeResult) string {
+	if res.SkillsPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("；skills.md %s：%s", skillsState(res.SkillsChanged), res.SkillsPath)
+}
+
+// attachSkills 记录手册落点并打日志（message 由调用方在最后拼，见 skillsNote）。
+func (u *Updater) attachSkills(res *UpgradeResult, path string, changed bool) {
+	res.SkillsPath, res.SkillsChanged = path, changed
+	u.logf("skills.md → %s（%s）", path, skillsState(changed))
+}
+
+// fetchVerified 下载发布里当前平台的归档并校验 sha256：拿不到 checksums.txt、
+// 缺对应资产或摘要不符，都直接拒绝（不允许装未校验的二进制）。
+func (u *Updater) fetchVerified(ctx context.Context, rel *ghRelease, assetV string) (string, []byte, error) {
+	name := u.assetName(assetV)
+	asset, sums := findAsset(rel, name), findAsset(rel, checksumsName)
+	if asset == nil {
+		return "", nil, types.Errorf(types.CodeNotFound, "release %s has no asset for %s/%s", rel.TagName, u.OS, u.Arch).
+			WithDetail("expected asset: " + name)
+	}
+	if sums == nil {
+		return "", nil, types.Errorf(types.CodeExec, "release %s has no %s; refusing to install unverified binary", rel.TagName, checksumsName)
+	}
+	u.logf("下载 %s ...", name)
+	archive, err := u.download(ctx, asset, maxArchive)
+	if err != nil {
+		return "", nil, err
+	}
+	sumData, err := u.download(ctx, sums, 1<<20)
+	if err != nil {
+		return "", nil, err
+	}
+	want, ok := expectedSum(sumData, name)
+	if !ok {
+		return "", nil, types.Errorf(types.CodeExec, "%s has no entry for %s", checksumsName, name)
+	}
+	got := sha256.Sum256(archive)
+	if hex.EncodeToString(got[:]) != want {
+		return "", nil, types.Errorf(types.CodeExec, "checksum mismatch for %s", name).
+			WithDetail(fmt.Sprintf("expected %s, got %s", want, hex.EncodeToString(got[:])))
+	}
+	return name, archive, nil
+}
+
+// skillsOnly 用于「不需要升级」但用户仍要 skills.md 的场景：只下载校验归档取出手册，
+// 完全不碰二进制（不下载校验的话就没法保证手册与二进制同源）。
+func (u *Updater) skillsOnly(ctx context.Context, rel *ghRelease, t target, res *UpgradeResult, o UpgradeOptions) (*UpgradeResult, error) {
+	if o.SkillsPath == "" {
+		return res, nil
+	}
+	name, archive, err := u.fetchVerified(ctx, rel, t.assetV)
+	if err != nil {
+		return nil, err
+	}
+	path, changed, err := u.writeSkills(archive, name, o.SkillsPath)
+	if err != nil {
+		return nil, err
+	}
+	u.attachSkills(res, path, changed)
+	res.Message += skillsNote(res)
+	return res, nil
 }
 
 func readLimited(r io.Reader) ([]byte, error) {
@@ -523,7 +668,7 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 	if t.channel == ChannelDev {
 		if u.sameBuild(t) {
 			res.Message = "已是 main 的最新 dev 构建，无需升级"
-			return res, nil
+			return u.skillsOnly(ctx, rel, t, res, o)
 		}
 	} else if cur, ok := u.current(); ok {
 		if c := rel.version.Compare(cur); c == 0 || (c < 0 && o.Version == "") {
@@ -531,45 +676,30 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 			if c < 0 {
 				res.Message = "当前版本高于可用的最新版本，无需升级"
 			}
-			return res, nil
+			return u.skillsOnly(ctx, rel, t, res, o)
 		}
-	}
-
-	name := u.assetName(t.assetV)
-	asset, sums := findAsset(rel, name), findAsset(rel, checksumsName)
-	if asset == nil {
-		return nil, types.Errorf(types.CodeNotFound, "release %s has no asset for %s/%s", rel.TagName, u.OS, u.Arch).
-			WithDetail("expected asset: " + name)
-	}
-	if sums == nil {
-		return nil, types.Errorf(types.CodeExec, "release %s has no %s; refusing to install unverified binary", rel.TagName, checksumsName)
 	}
 
 	exe, err := u.exePath()
 	if err != nil {
 		return nil, err
 	}
-	u.logf("下载 %s ...", name)
-	archive, err := u.download(ctx, asset, maxArchive)
+	name, archive, err := u.fetchVerified(ctx, rel, t.assetV)
 	if err != nil {
 		return nil, err
-	}
-	sumData, err := u.download(ctx, sums, 1<<20)
-	if err != nil {
-		return nil, err
-	}
-	want, ok := expectedSum(sumData, name)
-	if !ok {
-		return nil, types.Errorf(types.CodeExec, "%s has no entry for %s", checksumsName, name)
-	}
-	got := sha256.Sum256(archive)
-	if hex.EncodeToString(got[:]) != want {
-		return nil, types.Errorf(types.CodeExec, "checksum mismatch for %s", name).
-			WithDetail(fmt.Sprintf("expected %s, got %s", want, hex.EncodeToString(got[:])))
 	}
 	bin, err := extractBinary(archive, name, u.binName())
 	if err != nil {
 		return nil, types.Errorf(types.CodeExec, "extract %s: %v", name, err)
+	}
+	// skills.md 在替换二进制**之前**写：路径不可写时直接失败，不留下
+	// 「二进制换了、文档没写」的半成品状态。
+	if o.SkillsPath != "" {
+		path, changed, err := u.writeSkills(archive, name, o.SkillsPath)
+		if err != nil {
+			return nil, err
+		}
+		u.attachSkills(res, path, changed)
 	}
 
 	// 暂存文件与目标同目录，保证 rename 在同一文件系统内；Windows 上需 .exe 后缀才能自检运行。
@@ -611,6 +741,6 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 			WithHint("Windows 下请先关闭其他正在运行的 dtool 进程与占用该文件的程序后重试")
 	}
 	res.Upgraded, res.Path = true, exe
-	res.Message = fmt.Sprintf("已升级到 %s", t.expect)
+	res.Message = fmt.Sprintf("已升级到 %s", t.expect) + skillsNote(res)
 	return res, nil
 }

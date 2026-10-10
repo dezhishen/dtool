@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"strings"
+
 	"github.com/dezhishen/dtool/internal/buildinfo"
 	"github.com/dezhishen/dtool/internal/updater"
 	"github.com/dezhishen/dtool/pkg/types"
@@ -47,7 +49,7 @@ func runCheckUpdate(c *cobra.Command, version, channel string, pre bool) error {
 }
 
 func newUpgradeCmd(version string) *cobra.Command {
-	var target, channel string
+	var target, channel, skills string
 	var pre bool
 	c := &cobra.Command{
 		Use:   "upgrade",
@@ -59,8 +61,26 @@ func newUpgradeCmd(version string) *cobra.Command {
   dev      main 的最新构建（滚动发布 tag "dev"，比的是构建号而不是版本大小）
 
 ` + "`--version`" + ` 可指定任意历史版本（可降级）；dev 构建写 ` + "`--version dev`" + ` 或
-` + "`--version dev-<run id>`" + `，但 dev 渠道只保留最新一次构建。`,
-		Args: cobra.NoArgs,
+` + "`--version dev-<run id>`" + `，但 dev 渠道只保留最新一次构建。
+
+` + "`--skills[=路径]`" + ` 顺带把**这个版本**的 skills.md（agent 手册）另存一份：
+
+  --skills              写到当前目录（./skills.md）
+  --skills=docs/        写到 docs/skills.md（目录不存在则创建）
+  --skills=agent.md     写到指定文件
+
+不带 ` + "`--skills`" + ` 就完全不动文件。已经是最新版本时也能单独取手册（只下载校验归档，
+不碰二进制）。取值要用等号写，` + "`--skills docs/`" + ` 这种写法会报用法错误。`,
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				// --skills 是可选值开关（裸 --skills 表示当前目录），pflag 只认 `=` 形式的取值：
+				// 写成 `--skills docs/` 会把 docs/ 留成位置参数，这里必须给出可操作的提示，
+				// 否则用户只会看到一句「未知命令」。
+				return types.Errorf(types.CodeUsage, "意外的位置参数：%s", strings.Join(args, " ")).
+					WithHint("--skills 的取值要用等号写：--skills=目标目录；裸 --skills 表示写到当前目录")
+			}
+			return nil
+		},
 		RunE: func(c *cobra.Command, _ []string) error {
 			ch, err := resolveChannel(channel, pre)
 			if err != nil {
@@ -75,7 +95,7 @@ func newUpgradeCmd(version string) *cobra.Command {
 					WithHint("指定具体版本即已选定目标，不必再给渠道")
 			}
 			res, err := newUpdater(version).Upgrade(c.Context(),
-				updater.UpgradeOptions{Version: target, Channel: ch})
+				updater.UpgradeOptions{Version: target, Channel: ch, SkillsPath: skills})
 			if err != nil {
 				return err
 			}
@@ -85,5 +105,8 @@ func newUpgradeCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&target, "version", "", "目标版本，如 v1.2.0、1.2.0-preview.1，或 dev / dev-<run id>（可降级）")
 	c.Flags().StringVar(&channel, "channel", "", "升级渠道：stable（默认）/ preview / dev")
 	c.Flags().BoolVar(&pre, "pre", false, "等价于 --channel preview")
+	c.Flags().StringVar(&skills, "skills", "",
+		"顺带另存该版本的 skills.md：--skills=目录（写 目录/skills.md）/ --skills=文件.md；裸 --skills 写到当前目录")
+	c.Flags().Lookup("skills").NoOptDefVal = "."
 	return c
 }
