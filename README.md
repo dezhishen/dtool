@@ -45,7 +45,7 @@ v0.2.0 及以前的归档里它叫 `skills.md`，`dtool upgrade --skills` 两种
 
 ```bash
 # Linux / macOS（以 linux-amd64 为例，macOS 换成 darwin_amd64 或 darwin_arm64）
-V=v0.2.1                                              # 最新版本；预览版形如 v0.3.0-preview.1
+V=v0.2.2                                              # 最新版本；预览版形如 v0.3.0-preview.1
 base=https://github.com/dezhishen/dtool/releases/download/$V
 curl -LO "$base/dtool_${V#v}_linux_amd64.tar.gz"
 curl -LO "$base/checksums.txt"
@@ -57,7 +57,7 @@ dtool version                                         # 确认可用
 
 ```powershell
 # Windows（PowerShell）
-$V = "v0.2.1"                                        # 最新版本
+$V = "v0.2.2"                                        # 最新版本
 $base = "https://github.com/dezhishen/dtool/releases/download/$V"
 Invoke-WebRequest "$base/dtool_$($V.TrimStart('v'))_windows_amd64.zip" -OutFile dtool.zip
 Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
