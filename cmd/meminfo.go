@@ -87,21 +87,42 @@ func newMemInfoCmd() *cobra.Command {
 					"describe":        mem.Describe(),
 				},
 				"guard": map[string]any{
-					"watchdog":        mem.Available > 0,
-					"threshold_human": memguard.HumanSize(mem.Available),
-					"go_soft_limit":   mem.Available > 0,
+					// 看门狗按 Threshold 中止（硬上限会再打八折，见 memguard.Threshold）
+					"watchdog":        mem.Threshold() > 0,
+					"threshold":       mem.Threshold(),
+					"threshold_human": memguard.HumanSize(mem.Threshold()),
+					"go_soft_limit":   mem.SoftLimit() > 0,
+					"hard_cap":        mem.Hard,
 				},
+				"ladder":          query.Ladder(),
 				"usage_now":       usage,
 				"usage_now_human": memguard.HumanSize(usage),
 				"job_object":      job,
 				"warnings":        warns,
+				"mem_policy":      policyName(g.memPolicy),
 			}
 			if len(bindings) > 0 {
-				report["preview"] = query.PreviewLoad(g.loadMode, mem, bindings)
+				// 预演的是「会选哪一档、为什么」，而不是「会不会被拒绝」：
+				// 拒绝只是连最省档都放不下时的一种可选策略（--mem-policy strict）。
+				pv, err := query.PreviewPlan(g.loadMode, g.store, g.memPolicy, mem,
+					memguard.PlanFile(g.workspace), bindings)
+				if err != nil {
+					return err
+				}
+				report["plan"] = pv
 			}
 			return printJSON(c.OutOrStdout(), report)
 		},
 	}
 	c.Flags().StringArrayVar(&srcs, "source", nil, "预演某个数据源的预检结果：alias=文件，可重复")
 	return c
+}
+
+// policyName 展示本次的失败策略（try / strict）。
+func policyName(s string) string {
+	p, err := memguard.ParsePolicy(s)
+	if err != nil {
+		return string(memguard.PolicyTry)
+	}
+	return string(p)
 }

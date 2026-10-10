@@ -92,6 +92,11 @@ type QueryResult struct {
 	ResultFile string   `json:"result_file,omitempty"`
 	OutputFile string   `json:"output_file,omitempty"`
 	ActionID   string   `json:"action_id,omitempty"`
+	// Strategy 是本次实际使用的执行档（如 full+memory / stream+disk），
+	// StrategyNote 说明为什么是这一档（预算、阈值、历史成功率、是否被强制指定）。
+	// AI 读它就知道「这次为什么慢/为什么换了档」。
+	Strategy     string `json:"strategy,omitempty"`
+	StrategyNote string `json:"strategy_note,omitempty"`
 }
 
 type ConvertResult struct {

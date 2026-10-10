@@ -117,7 +117,9 @@ func Detect() Memory {
 			source = "Windows Job Object 作业内存上限"
 		}
 		_ = ji
-		return Memory{Limit: job, Used: used, Available: budgetFrom(job, used, sys), Source: source}
+		// Job Object 的进程/作业内存上限是硬上限：撞上去是 runtime fatal（VirtualAlloc
+		// 返回 1455），连 recover 都没机会。
+		return Memory{Limit: job, Used: used, Available: budgetFrom(job, used, sys), Source: source, Hard: true}
 	}
 	if sys > 0 {
 		source := "系统可用内存"
@@ -137,6 +139,19 @@ func JobProbe() JobInfo {
 	ji.TotalPhys, ji.AvailPhys = systemMemory()
 	ji.UsageNow = CurrentUsage()
 	return ji
+}
+
+// PeakUsage 返回本进程的**峰值**提交量（PeakPagefileUsage）：记录「这一次实际用了
+// 多少」，供选档的历史样本使用（CurrentUsage 是当前值，不是峰值）。
+func PeakUsage() uint64 {
+	h, _ := syscall.GetCurrentProcess()
+	var pmc processMemoryCounters
+	pmc.Cb = uint32(unsafe.Sizeof(pmc))
+	if r, _, _ := procGetProcessMemoryInfo.Call(uintptr(h),
+		uintptr(unsafe.Pointer(&pmc)), unsafe.Sizeof(pmc)); r == 0 {
+		return RuntimeUsage()
+	}
+	return uint64(pmc.PeakPagefileUsage)
 }
 
 // CurrentUsage 返回本进程的私有提交量（commit charge）。

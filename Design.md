@@ -915,6 +915,59 @@ func RenderChart(data *QueryResult, chartType, xField, yField, title, output str
 
 1. `--font` 命令行参数
 2. `-c config.yaml` 中的 `font`
+#### 8.4.3 执行档阶梯与选档（internal/memguard/plan.go）
+
+内存上限的作用是**选执行档**，不是「过 / 不过」。档位把两个维度合成：装入方式
+（`full` / `stream`）× 库位置（内存 / 磁盘）：
+
+| 档 | 实测峰值/输入（123MB 输入，1 核） | 用于估算的上界 |
+|---|---|---|
+| `full` + 内存库 | 7.75× | 13× + 32MB |
+| `stream` + 内存库 | 1.44×（≤2.44×） | 2× + 32MB |
+| `stream` + 磁盘库 | **0.16×**（20MB） | 0.3× + 24MB |
+
+磁盘档是「不拦截」的关键：页缓存变成文件页后可被系统回收、也不计入进程私有提交，
+所以同一份 123MB 输入在 256MB 硬上限下从「预检拒绝」变成「跑完，14.5s，峰值 51MB」。
+没有 `full` + 磁盘档——它的峰值来自 Go 堆，换库不省（显式组合会报用法错误）。
+
+**选档函数**（纯函数，Linux 可测）：
+
+```
+Choose{Size, Memory, Candidates, Forced, Policy, Samples} -> Plan{Chosen, Threshold, Chance, Reason, Rejected}
+  threshold = Memory.Threshold()        // 软预算=可用量；硬上限（cgroup/Job）再打八折
+  for 档 in 快到省:
+      pred = Base + Size×Factor
+      if pred ≤ threshold           -> 选它（放得下，不必浪费一次尝试）
+      if TryChance(样本, 档, pred, threshold) ≥ MinChance(0.5) -> 选它（擦边，值得一试）
+      else 记入 Rejected（附原因）并继续
+  都不行 -> Policy=try：仍选最省档并标 Risky（失败写进 Action，AI 据此换档）；
+            Policy=strict：交给调用方失败
+```
+
+**擦边概率**按工作区已有的执行记录算（这就是「按已执行过的做数学计算」）：
+
+```
+Chance = P(ratio ≤ threshold / pred), ratio = 实测峰值 / 预计峰值
+Chance = (n·经验CDF + 先验权重3·正态CDF(ratio~N(0.85, 0.30))) / (n + 3)
+```
+
+样本 < 5 条时并入其他档的 ratio（偏差形态共通），> 200 条按时间裁剪。先验保证
+「没有历史时偏保守」而不是偏乐观。
+
+**记录**（`.dtool/plans/samples.json`，`--no-record` 时不写）：每次执行写一条
+`{rung, size, predicted, peak, ok, ms, source, at}`，保存时重算派生统计（成功率、
+ratio 的 P10/P50/P90、耗时中位数）。fatal 崩溃时进程什么都不剩，只有这份记录还在——
+它是「同一个输入只付一次试错代价」的载体。
+
+**操作者可强行指定**：`--load-mode`（`full`/`stream`）与 `--store`（`memory`/`disk`）
+两个正交开关；都留 `auto` 时走阶梯。只剩一档时视为强制（理由里写明「操作者指定」），
+强制档即使预计会崩也会执行——排查需要，且失败会被完整记录。
+
+**结果与观测**：`QueryResult.strategy` / `strategy_note` 说明用了哪一档、为什么；
+`meminfo` 的 `plan` 段列出整条阶梯的预计峰值与历史成功率（`verdict`: ok / borderline /
+risky / forced），`ladder` 段给出档位定义。
+
+
 3. 环境变量 `DTOOL_FONT`
 4. 自动发现系统字体：扫描平台字体目录（Linux `/usr/share/fonts` 等、macOS `/System/Library/Fonts` 等、Windows `%WINDIR%\Fonts`），按文件名关键字（Noto Sans CJK、文泉驿、微软雅黑、苹方、黑体…）排优先级，逐个校验可解析，并**优先选同时含汉字与数字字形的字体**（仅 CJK 的字体如 Droid Sans Fallback 只作兜底，并给出警告，否则坐标轴数字会显示为方框）。
 

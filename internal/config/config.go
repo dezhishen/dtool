@@ -18,6 +18,8 @@ type Config struct {
 	Workspace   string `yaml:"workspace"`    // 工作区目录
 	PreviewRows int    `yaml:"preview_rows"` // Action 预览行数
 	LoadMode    string `yaml:"load_mode"`    // JSON 装入方式：auto / stream / full
+	Store       string `yaml:"store"`        // 落库位置：auto / memory / disk
+	MemPolicy   string `yaml:"mem_policy"`   // 都超预算时：try / strict
 }
 
 // Load 读取配置；font/workspace 中的相对路径相对配置文件所在目录解析，支持 ~/ 前缀。

@@ -32,6 +32,11 @@ type Env struct {
 	MaxMemory *uint64
 	// LoadMode 传给查询的装入方式（auto / stream / full）。
 	LoadMode string
+	// Store 传给查询的落库位置（auto / memory / disk）；MemPolicy 决定「都放不下」时
+	// 是仍试最省档（try）还是直接失败（strict）；PlanFile 是选档历史文件（可空）。
+	Store     string
+	MemPolicy string
+	PlanFile  string
 }
 
 // Excel 转换的内存预估（流式转换后实测：13KB→18.5MB、7.4MB→47MB、17.8MB→76MB，
@@ -220,7 +225,8 @@ func (e *Env) Query(p QueryParams, parentID string) (*types.QueryResult, error) 
 	a, err := e.run("query", input, parentID, derived, func(_, dir string) (*action.Output, error) {
 		r, err := query.Run(e.Ctx, query.Options{SQL: p.SQL, Sources: sources,
 			Roots: []string{e.WS.Root, cwd}, Lookup: (&dataset.Store{WS: e.WS}).Lookup,
-			Sandbox: p.Sandbox, MaxRows: p.MaxRows, Timeout: p.Timeout, MaxMemory: e.MaxMemory, LoadMode: e.LoadMode})
+			Sandbox: p.Sandbox, MaxRows: p.MaxRows, Timeout: p.Timeout, MaxMemory: e.MaxMemory,
+			LoadMode: e.LoadMode, Store: e.Store, MemPolicy: e.MemPolicy, PlanFile: e.PlanFile})
 		if err != nil {
 			return nil, err
 		}

@@ -72,6 +72,8 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，会在 ~0.25s 内被看护进程落盘收敛，见下） |
 | `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
+| `--store auto\|memory\|disk` | SQLite 库落在哪：auto（按预算选档）/ memory（快）/ disk（峰值最低） |
+| `--mem-policy try\|strict` | 所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败 |
 | `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
 
 通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
@@ -185,7 +187,22 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
 - Windows 上的预检与看门狗按**提交量**（commit charge）判定，因为 Job Object 的进程内存上限
   本身就是提交上限；Linux 仍按 RSS。
 - 内存超出预算时看门狗会先打印「内存超出预算（本进程已用 xx，预算 xx），正在中止」，再以 `code: 4` 失败——不会静默卡住。显式 `--load-mode full` 时也是逐元素解码、可被中止，长文件不会再出现「几十秒没有任何输出」。
+- **内存上限决定「选哪一档」，不是「过/不过」**：`full+memory`（最快、峰值 ≈ 8–13×输入）
+  → `stream+memory`（≈ 1.4–2.4×）→ `stream+disk`（≈ 0.16×，页缓存变成文件页、可回收）。
+  实测 123MB 输入在 1 核 / 256MB 硬上限下：内存档峰值 176MB，磁盘档只有 20MB，耗时一样。
+  所以受限环境里默认动作是「换个档照跑」。
+- **结果里的 `strategy` 告诉你用了哪一档**，`strategy_note` 说明为什么（预算、阈值、历史成功率）。
+  突然变慢多半是降档了；需要快就 `--load-mode full`（单档强制）。
+- **失败与重试的契约**：
+  | 看到 | 动作 |
+  |---|---|
+  | `code=0` + `strategy` | 完成；慢的话读 `strategy_note` 解释原因 |
+  | `code=4` + 提到「内存」 | 换更省档重跑一次：加 `--store disk`；仍失败就拆输入或提高 --max-memory |
+  | `code=5`（被杀） | `actions show <id>` 看 `strategy`，再用更省档重跑一次；同一输入连续两次 `code=5` 就停止并上报 |
+  默认策略 `try` 会在预计放不下时**仍试一次**（宁可慢，不要崩），`--mem-policy strict` 才是直接失败。
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
+- 选档历史在 `.dtool/plans/samples.json`（预计 vs 实测峰值、耗时、成功与否 + 派生分位统计）；
+  `--no-record` 时不写。它让「试错」跨进程累积：崩过一次的档下次不会再被优先选中。
 - 排查「预检/看门狗到底在不在工作」：`dtool meminfo [--source alias=文件]`（预算来源、原始探测字段与预检预演）；
   `DTOOL_DEBUG_MEMORY=1` 把每个命令的判定过程打到 stderr（来源、预算、装入方式、预计 need、预检结论、看门狗阈值）。
 - 预算来源随平台不同：Linux 读 cgroup/系统可用内存，Windows 读 **Job Object 内存上限**

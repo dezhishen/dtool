@@ -39,14 +39,20 @@ func (m Memory) Describe() string {
 		HumanSize(m.Limit), HumanSize(m.Used), HumanSize(m.Available), m.Source)
 }
 
-// SoftLimit 是交给 Go 运行时的**堆**软上限，比可用预算更保守（3/4）。
+// SoftLimit 是交给 Go 运行时的**堆**软上限：阈值（见 Threshold，硬上限会再打折）
+// 的 3/4。
 //
 // 为什么不能直接用 Available：软上限只约束 Go 堆，而外部硬上限（cgroup、Windows
 // Job Object）算的是整个进程的提交量——SQLite 的页缓存走 mmap/VirtualAlloc、runtime
 // 自身的元数据都在堆外。堆按 100% 预算走，加上堆外那部分就会顶到硬上限：Linux 上是
 // 内核杀进程，Windows 上是 runtime 的 fatal error: out of memory（**不可恢复**，
 // 连 recover 都没机会）。留出 25% 让 GC 先动起来，别等到硬上限才开始回收。
-func (m Memory) SoftLimit() uint64 { return m.Available / 4 * 3 }
+func (m Memory) SoftLimit() uint64 {
+	if m.Available == 0 {
+		return 0
+	}
+	return m.Threshold() / 4 * 3
+}
 
 // Verdict 把预检结果翻成一句话，便于日志与 meminfo。
 func Verdict(err error) string {
@@ -78,8 +84,9 @@ var NoticeWriter io.Writer = os.Stderr
 type Memory struct {
 	Limit     uint64 // 上限（cgroup 或显式配置），0 表示未知
 	Used      uint64 // 已用（cgroup 口径），未知为 0
-	Available uint64 // 预计可用，0 表示不做检查
+	Available uint64 // 预计可用（已含余量），0 表示不做检查
 	Source    string // 判定来源，用于报错信息
+	Hard      bool   // 来源是外部**硬上限**（cgroup / Job Object）：超了不可恢复
 }
 
 // ParseBytes 解析 512M / 1.5G / 2097152 这类容量；0 或空表示不限制。

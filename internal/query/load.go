@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -46,104 +45,52 @@ func ParseLoadMode(s string) (LoadMode, error) {
 		WithHint("可选：auto（按文件大小自适应）/ stream（流式，省内存）/ full（整块解析，快）")
 }
 
-// autoFullHeadroom 是 auto 模式选择整块解析时要求的最小余量（百分比）。
-// 估算倍率来自实测量级，擦着预算通过往往意味着加载中途被看门狗中止——宁可慢一点也走流式。
-const autoFullHeadroom = 80
-
-// resolveMode 决定单个数据源的装入方式：显式指定优先；auto 时文件够大、或整块解析放不下就改用流式。
-func resolveMode(mode string, size uint64, mem memguard.Memory) LoadMode {
-	if m, err := ParseLoadMode(mode); err == nil && m != LoadAuto {
-		return m
-	}
-	if size >= autoStreamSize {
-		return LoadStream
-	}
-	if mem.Available > 0 && size*fullPeakFactor > mem.Available*autoFullHeadroom/100 {
-		return LoadStream
-	}
-	return LoadFull
-}
-
-// Preview 是「不真正加载」的装入预演结果：回答「按当前预算，这条命令会不会被预检拦下」。
+// Preview 是「不真正加载」的装入预演：每档预计多少、会不会被选中。
 type Preview struct {
-	Alias     string `json:"alias"`
-	Path      string `json:"path"`
-	Size      uint64 `json:"size"`
-	SizeHuman string `json:"size_human"`
-	Mode      string `json:"mode"`
-	Need      uint64 `json:"need"`
-	NeedHuman string `json:"need_human"`
-	Verdict   string `json:"verdict"`
-	Error     string `json:"error,omitempty"`
-	ErrorHint string `json:"error_hint,omitempty"`
+	Alias     string  `json:"alias"`
+	Path      string  `json:"path"`
+	Size      uint64  `json:"size"`
+	SizeHuman string  `json:"size_human"`
+	Mode      string  `json:"mode"`  // 装入方式
+	Store     string  `json:"store"` // 落库位置
+	Need      uint64  `json:"need"`  // 预计峰值（Base + size×Factor）
+	NeedHuman string  `json:"need_human"`
+	Factor    float64 `json:"factor"` // 估算倍率
+	Chosen    bool    `json:"chosen"` // 本次会被选中的档
+	Chance    float64 `json:"chance"` // 按历史估计这一档能过的概率
+	Note      string  `json:"note,omitempty"`
 }
 
-// PreviewLoad 按体积与装入方式预演一组数据源（不读内容），供 meminfo 使用。
-func PreviewLoad(loadMode string, mem memguard.Memory, srcs map[string]string) []Preview {
-	aliases := make([]string, 0, len(srcs))
-	for a := range srcs {
-		aliases = append(aliases, a)
-	}
-	sort.Strings(aliases)
-	out := make([]Preview, 0, len(aliases))
-	var total, need uint64
-	modes := make([]LoadMode, 0, len(aliases))
-	for _, a := range aliases {
-		size := memguard.SizeOf(srcs[a])
-		m := resolveMode(loadMode, size, mem)
-		modes = append(modes, m)
-		total += size
-		need += size * uint64(peakFactor(m))
-		out = append(out, Preview{Alias: a, Path: srcs[a], Size: size,
-			SizeHuman: memguard.HumanSize(size), Mode: string(m),
-			Need: size * uint64(peakFactor(m)), NeedHuman: memguard.HumanSize(size * uint64(peakFactor(m)))})
-	}
-	err := memguard.CheckNeed("数据源", total, need, estimateNote(modes), mem, memguard.HintLoadMode)
-	for i := range out {
-		if err == nil {
-			out[i].Verdict = "ok"
-			continue
-		}
-		out[i].Verdict = "refused"
-		out[i].Error = err.Error()
-		if te, ok := err.(*types.Error); ok {
-			out[i].ErrorHint = te.Hint
-		}
-	}
-	return out
+// LadderPreview 是阶梯预演结果：每档的数字 + 最终选择 + 理由。
+type LadderPreview struct {
+	Sources   []Preview     `json:"sources"`
+	Rungs     []RungPreview `json:"rungs"`
+	Chosen    string        `json:"chosen"`
+	Reason    string        `json:"reason"`
+	Chance    float64       `json:"chance"`
+	Predicted uint64        `json:"predicted"`
+	Threshold uint64        `json:"threshold"`
+	Risky     bool          `json:"risky"`
+	Forced    bool          `json:"forced"`
+	Verdict   string        `json:"verdict"` // ok / borderline / risky / refused
 }
 
-// fullTight 判断整块解析的预计峰值是否逼近预算（超过 headroom 比例）。
-// 显式 --load-mode full 时用来提醒用户：这次很可能在中途被中止。
-func fullTight(size uint64, mem memguard.Memory) bool {
-	if mem.Available == 0 || size == 0 {
-		return false
-	}
-	need := size * fullPeakFactor
-	return need <= mem.Available && need > mem.Available*autoFullHeadroom/100
+// RungPreview 是单个执行档的预演数据。
+type RungPreview struct {
+	Name      string  `json:"name"`
+	Note      string  `json:"note"`
+	Need      uint64  `json:"need"`
+	NeedHuman string  `json:"need_human"`
+	Chance    float64 `json:"chance"`
+	Chosen    bool    `json:"chosen"`
 }
 
-func peakFactor(m LoadMode) int {
-	if m == LoadStream {
-		return streamPeakFactor
-	}
-	return fullPeakFactor
-}
-
-func modeNote(m LoadMode) string {
-	if m == LoadStream {
-		return "流式解析"
-	}
-	return "整块解析"
-}
-
-func estimateNote(modes []LoadMode) string {
-	for _, m := range modes {
-		if m == LoadStream {
-			return "含流式装入，按整块 13 倍 / 流式 2 倍估算"
-		}
-	}
-	return fmt.Sprintf("按整块解析实测 %d 倍估算", fullPeakFactor)
+// PreviewPlan 按预算与历史预演整条阶梯（不读文件内容），供 meminfo 使用。
+// 它回答的是「这条命令会选哪一档、为什么」，而不是「会不会被拒绝」——现在被拒绝
+// 只是「连最省档都预计放不下」时的一种可选策略（--mem-policy strict）。
+func PreviewPlan(loadMode, store, memPolicy string, mem memguard.Memory, planFile string,
+	srcs map[string]string) (LadderPreview, error) {
+	return previewPlan(loadMode, store, memPolicy, mem, planFile, srcs)
 }
 
 func ident(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }

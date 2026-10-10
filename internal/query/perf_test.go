@@ -162,10 +162,10 @@ func BenchmarkLoadFullGroupBy(b *testing.B) {
 	benchRun(b, LoadFull, `SELECT region, COUNT(*) AS c, SUM(amount) AS s FROM d GROUP BY region ORDER BY c DESC`)
 }
 
-// BenchmarkResolveMode 只是操作内存里的常量，用于确认自适应判断本身不是瓶颈。
-func BenchmarkResolveMode(b *testing.B) {
+// BenchmarkChoosePlan 只是算术与查表，用于确认选档本身不是瓶颈。
+func BenchmarkChoosePlan(b *testing.B) {
 	mem := memguard.Memory{Available: 1 << 30, Source: "bench"}
 	for i := 0; i < b.N; i++ {
-		_ = resolveMode("auto", 64<<20, mem)
+		_, _, _, _ = choosePlan(Options{}, mem, 64<<20)
 	}
 }

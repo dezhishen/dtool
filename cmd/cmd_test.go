@@ -207,7 +207,7 @@ func TestReapCommandConverges(t *testing.T) {
 	}
 }
 
-// meminfo 是「预检为什么没拦住」的排查入口：必须给出探测来源、预算与预演结论。
+// meminfo 是「选档为什么是这样」的排查入口：必须给出探测来源、预算、阶梯与预演结论。
 func TestMemInfoCommand(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -220,25 +220,45 @@ func TestMemInfoCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"platform", "detected", "budget", "guard", "job_object", "usage_now", "preview"} {
+	for _, k := range []string{"platform", "detected", "budget", "guard", "job_object",
+		"usage_now", "plan", "ladder", "mem_policy"} {
 		if _, ok := got[k]; !ok {
 			t.Fatalf("meminfo 缺少 %q：%v", k, got)
 		}
 	}
-	preview := got["preview"].([]any)
-	if len(preview) != 1 || preview[0].(map[string]any)["verdict"] != "ok" {
-		t.Fatalf("默认预算下应通过：%v", preview)
+	plan := got["plan"].(map[string]any)
+	if plan["verdict"] != "ok" || plan["chosen"] == "" {
+		t.Fatalf("默认预算下应直接选档并通过：%v", plan)
+	}
+	if rungs := plan["rungs"].([]any); len(rungs) != 3 {
+		t.Fatalf("预演应列出整条阶梯：%v", rungs)
 	}
 
-	// 预算明显不够时必须给出 refused（这就是「排查结论」）
+	// 预算明显不够：默认策略是「仍试最省档」，所以 verdict 是 risky 而不是 refused
 	got, err = run(t, "meminfo", "--max-memory", "1K", "--source", "d=d.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	pv := got["preview"].([]any)[0].(map[string]any)
-	if pv["verdict"] != "refused" || pv["error"] == "" {
-		t.Fatalf("预算不足应 refused 且带原因：%v", pv)
+	plan = got["plan"].(map[string]any)
+	if plan["verdict"] != "risky" {
+		t.Fatalf("预算不足应标 risky（默认仍会试最省档）：%v", plan)
 	}
+	if !strings.Contains(plan["reason"].(string), "最省档") {
+		t.Fatalf("理由要说明会试哪一档：%v", plan["reason"])
+	}
+	if plan["chosen"] != "stream+disk" {
+		t.Fatalf("应选最省档：%v", plan["chosen"])
+	}
+
+	// --mem-policy strict 时同样的预算应当直接拒绝
+	got, err = run(t, "meminfo", "--max-memory", "1K", "--mem-policy", "strict", "--source", "d=d.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan = got["plan"].(map[string]any); !strings.Contains(plan["reason"].(string), "strict") {
+		t.Fatalf("strict 应说明不尝试：%v", plan["reason"])
+	}
+
 	if got["guard"].(map[string]any)["watchdog"] != true {
 		t.Fatalf("给了预算就该开看门狗：%v", got["guard"])
 	}

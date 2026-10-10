@@ -170,7 +170,10 @@ go test ./internal/query -bench LoadStream -benchmem   # 只看某一项
 
 为避免「进程被内核静默杀掉、用户不知道发生了什么」，dtool 会：
 
-- **载入前预估**：按所选装入方式的倍率推算峰值内存，超出可用预算时直接失败，并给出数字与处置建议。**建议按场景给**：`query` 可切 `--load-mode stream`（整块解析 ≈ 文件 × 13）；`convert` 不需要这个开关（转换只有一个流式实现，峰值只随文件体积增长；传了不生效，CLI 会在 stderr 提示），提示只会让它缩小输入或放宽预算；两者都保留 `--max-memory 0` 强制运行口；
+- **按预算选执行档**：内存上限用来**选档**（`full+memory` → `stream+memory` → `stream+disk`），
+  而不是「过/不过」——磁盘库那一档把同一份 123MB 输入的峰值从 176MB 压到 20MB（耗时几乎不变），
+  所以受限环境里通常是"换个档照跑"而不是报错。只有连最省档都预计放不下时才触及失败路径，
+  且默认策略仍会试一次并把结果记入 Action（`--mem-policy strict` 可改为直接失败）。**建议按场景给**：`query` 可切 `--load-mode stream`（整块解析 ≈ 文件 × 13）；`convert` 不需要这个开关（转换只有一个流式实现，峰值只随文件体积增长；传了不生效，CLI 会在 stderr 提示），提示只会让它缩小输入或放宽预算；两者都保留 `--max-memory 0` 强制运行口；
 - **运行期看门狗**：载入/查询期间监控本进程内存，超出预算时先在 stderr 打印「内存超出预算（已用 xx，预算 xx），正在中止」，再以普通错误中止并写入一条 `failed` 的 Action（整块解析也能被中止，不再长时间无输出）；
 - **留余量**：`auto` 只有在整块解析峰值 ≤ 预算 80% 时才选它，否则走流式；显式 `--load-mode full` 且逼近预算时会提前提示；
 - **载入进度**：数据源 ≥8MB 时向 stderr 打印「载入 xx（大小，装入方式，预计需约 xx 内存）...」，即使进程被强杀也能看出卡在哪里。
@@ -209,7 +212,23 @@ DTOOL_MAX_MEMORY=2G dtool pipeline ...    # 环境变量，适合容器/CI
 
 ```yaml
 load_mode: auto      # auto / stream / full
+store: auto          # auto / memory / disk（SQLite 库落在哪）
+mem_policy: try      # try（仍试最省档）/ strict（直接失败）
 ```
+
+需要**强行指定**而不靠自适应时（排查、对比、或你就是想快）：
+
+```bash
+dtool query --load-mode full --sql '...'    # 强制整块解析（峰值高，预算不足会自行降档前先试）
+dtool query --store disk  --sql '...'       # 强制磁盘库（峰值最低，硬上限下最稳）
+dtool query --load-mode full --store disk   # 报用法错误：full 的峰值在 Go 堆，换库不省
+dtool query --mem-policy strict --sql '...' # 连最省档都放不下时直接失败，不试
+```
+
+每次实际用的档会写进结果（`strategy` / `strategy_note`）与 Action，`meminfo` 会列出
+整条阶梯的预计峰值与历史成功率。执行的实测结果按「预计/实测」记入
+`.dtool/plans/samples.json`（`--no-record` 时不写）：**同一台机器、同一个输入只付一次
+试错代价**，下次直接命中能过的档。
 
 ## 检查更新与升级
 

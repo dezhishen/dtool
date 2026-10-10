@@ -29,6 +29,8 @@ type globalFlags struct {
 	previewRows int
 	noRecord    bool
 	maxMemory   string
+	store       string
+	memPolicy   string
 	loadMode    string
 }
 
@@ -62,6 +64,8 @@ func Execute(version string) error {
 	pf.BoolVar(&g.noRecord, "no-record", false, "跳过 Action 记录")
 	pf.StringVar(&g.maxMemory, "max-memory", "", "内存预算（如 1.5G）；默认自动探测 cgroup/系统可用内存，0 表示关闭检查")
 	pf.StringVar(&g.loadMode, "load-mode", "auto", "JSON 装入方式：auto 按文件大小自适应 / stream 流式（省内存）/ full 整块解析（快）")
+	pf.StringVar(&g.store, "store", "auto", "SQLite 库落在哪：auto 按内存预算自适应 / memory 内存库（快）/ disk 磁盘库（峰值低，硬上限下更稳）")
+	pf.StringVar(&g.memPolicy, "mem-policy", "try", "所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败")
 
 	var checkUpdate, pre bool
 	root.Flags().BoolVar(&checkUpdate, "update", false, "检查是否有新版本（不安装；配合 --pre 包含预览版）")
@@ -145,7 +149,10 @@ func newEnv(ctx context.Context) (*pipeline.Env, error) {
 	return &pipeline.Env{
 		Ctx: ctx, WS: ws, Rec: &action.Recorder{WS: ws},
 		Meta:    action.Metadata{Tags: tags, Notes: g.notes},
-		Preview: g.previewRows, NoRecord: g.noRecord, Command: commandLine(), MaxMemory: parsedMaxMemory, LoadMode: g.loadMode,
+		Preview: g.previewRows, NoRecord: g.noRecord, Command: commandLine(), MaxMemory: parsedMaxMemory,
+		LoadMode: g.loadMode, Store: g.store, MemPolicy: g.memPolicy,
+		// --no-record 表示「不留痕迹」，选档历史也一并跳过
+		PlanFile: planFile(g.noRecord, g.workspace),
 	}, nil
 }
 
@@ -197,6 +204,24 @@ func loadConfig(c *cobra.Command, _ []string) error {
 		}
 		g.loadMode = string(m)
 	}
+	// --store / --mem-policy 是操作者「强行指定执行方式」的入口：这里只校验取值，
+	// 组合是否成立（如 full+disk）留给选档处报错，那里能给出更具体的建议。
+	if g.store == "" {
+		g.store = "auto"
+	}
+	if st, err := query.ParseStore(g.store); err != nil {
+		return err
+	} else {
+		g.store = string(st)
+	}
+	if g.memPolicy == "" {
+		g.memPolicy = "try"
+	}
+	if mp, err := memguard.ParsePolicy(g.memPolicy); err != nil {
+		return types.Errorf(types.CodeUsage, "%v", err).WithHint("try 与 strict 二选一")
+	} else {
+		g.memPolicy = string(mp)
+	}
 	if g.maxMemory != "" {
 		n, err := memguard.ParseBytes(g.maxMemory)
 		if err != nil {
@@ -216,6 +241,12 @@ func loadConfig(c *cobra.Command, _ []string) error {
 	if cfg.LoadMode != "" && !c.Flags().Changed("load-mode") {
 		g.loadMode = cfg.LoadMode
 	}
+	if cfg.Store != "" && !c.Flags().Changed("store") {
+		g.store = cfg.Store
+	}
+	if cfg.MemPolicy != "" && !c.Flags().Changed("mem-policy") {
+		g.memPolicy = cfg.MemPolicy
+	}
 	if cfg.Workspace != "" && !c.Flags().Changed("workspace") {
 		g.workspace = cfg.Workspace
 	}
@@ -230,4 +261,12 @@ func applyFont(c *cobra.Command, font *string) {
 	if !c.Flags().Changed("font") && cfgFont != "" {
 		*font = cfgFont
 	}
+}
+
+// planFile 返回选档历史文件；--no-record 时不读不写（与 Action 一致：不留痕迹）。
+func planFile(noRecord bool, workspace string) string {
+	if noRecord {
+		return ""
+	}
+	return memguard.PlanFile(workspace)
 }

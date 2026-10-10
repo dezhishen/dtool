@@ -19,7 +19,9 @@ func Detect() Memory {
 	}
 	limit, used, src := cgroupMemory()
 	avail := memAvailable()
-	m = Memory{Limit: limit, Used: used, Source: src}
+	// Hard：cgroup 超限 = 被内核 OOM-kill，不可恢复（系统可用内存则是软信号，
+	// 超了通常先换出/回收，进程还有机会自己减速）。
+	m = Memory{Limit: limit, Used: used, Source: src, Hard: limit > 0}
 	// 取 min(cgroup 上限-已用, 系统可用)；没有 cgroup 上限时就用系统可用内存。
 	// 这里曾经写成 min(m.Available, avail) 且 m.Available 在没有 cgroup 时是 0，
 	// 结果「普通机器上预检与看门狗全是关的」——探针（meminfo）才把它照出来。
@@ -109,4 +111,28 @@ func CurrentUsage() uint64 {
 // JobProbe：Linux 没有 Job Object（预算来自 cgroup/系统可用内存），返回空值占位。
 func JobProbe() JobInfo {
 	return JobInfo{Note: "Linux 没有 Job Object，预算来自 cgroup/系统可用内存"}
+}
+
+// PeakUsage 返回本进程的峰值 RSS（VmHWM）：记录「这一次实际用了多少」，
+// 供选档的历史样本使用（看门狗用的是当前值 CurrentUsage，不是峰值）。
+func PeakUsage() uint64 {
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return RuntimeUsage()
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "VmHWM:") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			break
+		}
+		kb, err := strconv.ParseUint(f[1], 10, 64)
+		if err != nil {
+			break
+		}
+		return kb * 1024
+	}
+	return RuntimeUsage()
 }

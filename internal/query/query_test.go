@@ -265,7 +265,7 @@ func TestDebugMemoryLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, want := range []string{"[内存]", "来源=", "预检=", "看门狗="} {
+	for _, want := range []string{"[内存]", "来源=", "执行档=", "看门狗="} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("调试输出缺少 %q：\n%s", want, out)
 		}
@@ -298,34 +298,50 @@ func TestCanceledContextIsInterrupted(t *testing.T) {
 	}
 }
 
-func TestMemoryGuardBlocksOversizedLoad(t *testing.T) {
+func TestMemoryPolicyControlsOversizedLoad(t *testing.T) {
 	ws, cwd := setup(t)
-	base := func(max *uint64) Options {
+	base := func(max *uint64, policy string) Options {
 		return Options{SQL: `SELECT COUNT(*) AS n FROM d`, Roots: []string{ws, cwd}, Sandbox: true,
-			Sources: map[string]string{"d": filepath.Join(cwd, "local.json")}, MaxMemory: max}
+			Sources:   map[string]string{"d": filepath.Join(cwd, "local.json")},
+			MaxMemory: max, MemPolicy: policy}
 	}
 	tiny := uint64(10)
-	_, err := Run(context.Background(), base(&tiny))
+
+	// strict：连最省档都放不下就直接失败，并把数字与退出口写清楚
+	_, err := Run(context.Background(), base(&tiny, "strict"))
 	var te *types.Error
 	if !errors.As(err, &te) || te.Code != types.CodeExec || !strings.Contains(te.Message, "内存不足") {
-		t.Fatalf("err = %v", err)
+		t.Fatalf("strict 应立即失败：%v", err)
 	}
-	if !strings.Contains(te.Detail, "13 倍") || !strings.Contains(te.Hint, "--max-memory 0") {
-		t.Fatalf("not actionable: %q / %q", te.Detail, te.Hint)
+	if !strings.Contains(te.Detail, "阈值") || !strings.Contains(te.Hint, "--max-memory 0") {
+		t.Fatalf("错误不可操作：%q / %q", te.Detail, te.Hint)
 	}
+
+	// try（默认）：不预先拦截，而是按最省档试一次。小输入可能照样跑完（估算的固定
+	// 开销是上界），真撞上限时会由看门狗以普通错误收场——两种都不是「预检拒绝」。
+	r, err := Run(context.Background(), base(&tiny, "try"))
+	if err != nil {
+		var te2 *types.Error
+		if errors.As(err, &te2) && te2.Code != types.CodeExec && te2.Code != types.CodeInterrupted {
+			t.Fatalf("应是可读错误（code 4/5），得到 %+v", te2)
+		}
+		if strings.Contains(err.Error(), "--mem-policy strict") {
+			t.Fatalf("try 策略不该走预先拒绝路径：%v", err)
+		}
+	} else if r.Strategy == "" {
+		t.Fatal("成功时结果里应带上执行档")
+	}
+
 	// --max-memory 0 关闭检查后应正常执行
 	off := uint64(0)
-	r, err := Run(context.Background(), base(&off))
+	r, err = Run(context.Background(), base(&off, "try"))
 	if err != nil || r.RowCount != 1 {
 		t.Fatalf("guard off: %+v %v", r, err)
 	}
-	// 预算充足时也放行
-	big := uint64(1 << 30)
-	if _, err := Run(context.Background(), base(&big)); err != nil {
-		t.Fatalf("enough memory: %v", err)
+	if r.Strategy == "" {
+		t.Fatal("结果里应带上本次使用的执行档")
 	}
 }
-
 func TestNumericColumnsCompareAndSortNumerically(t *testing.T) {
 	ws, cwd := setup(t)
 	// 混合整数/小数，且 opt 列首行为 null：都必须按数值比较与排序
@@ -488,28 +504,14 @@ func TestParseLoadModeAndResolve(t *testing.T) {
 		}
 	}
 
-	big, small := uint64(64<<20), uint64(1<<20)
-	none := memguard.Memory{}
-	cases := []struct {
-		mode string
-		size uint64
-		mem  memguard.Memory
-		want LoadMode
-	}{
-		{"stream", small, none, LoadStream},
-		{"full", big, none, LoadFull},
-		{"auto", small, none, LoadFull},
-		{"auto", big, none, LoadStream},
-		{"auto", small, memguard.Memory{Available: 1 << 20, Source: "t"}, LoadStream}, // 预算不足 -> 转流式
-		{"auto", small, memguard.Memory{Available: 1 << 30, Source: "t"}, LoadFull},
+	// 显式指定即强制：--load-mode stream 时不会被预算改成别的档
+	_, spec, _, err := choosePlan(Options{LoadMode: "stream"},
+		memguard.Memory{Available: 1 << 30, Source: "t"}, 1<<20)
+	if err != nil || spec.Mode != LoadStream {
+		t.Fatalf("--load-mode stream 应强制流式：%+v %v", spec, err)
 	}
-	for _, c := range cases {
-		if got := resolveMode(c.mode, c.size, c.mem); got != c.want {
-			t.Errorf("resolveMode(%s, %d) = %s, want %s", c.mode, c.size, got, c.want)
-		}
-	}
-	if peakFactor(LoadStream) >= peakFactor(LoadFull) {
-		t.Fatal("流式倍率应当更低")
+	if ladder[len(ladder)-1].Factor >= ladder[0].Factor {
+		t.Fatal("阶梯应从快到省排列（倍率递增）")
 	}
 }
 

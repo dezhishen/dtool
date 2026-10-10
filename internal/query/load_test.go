@@ -82,33 +82,66 @@ func TestDecodeRowsRejectsNonArray(t *testing.T) {
 	}
 }
 
-// auto 选整块解析时要留余量：估算擦着预算通过，实际往往在中途被看门狗中止。
-func TestResolveModeAutoKeepsHeadroom(t *testing.T) {
-	size := uint64(1 << 20) // 整块解析预计 13MB
+// 选档：预算宽松时用最快的档，紧了就降档；操作者强制指定优先于预算。
+func TestChooseLadderByBudget(t *testing.T) {
+	size := uint64(10 << 20)
 	cases := []struct {
+		name      string
 		available uint64
-		want      LoadMode
+		hard      bool
+		want      string
 	}{
-		{20 << 20, LoadFull},   // 13MB ≤ 16MB，留有余量
-		{15 << 20, LoadStream}, // 13MB > 12MB，太紧 -> 流式
+		// 10MB 输入：full 预计 32+130=162MB、stream+memory 52MB、stream+disk 27MB
+		{"预算宽松", 2 << 30, true, "full+memory"},       // 162MB ≤ 1.6GB 阈值
+		{"整块放不下", 100 << 20, false, "stream+memory"}, // 162MB > 100MB，流式 52MB 放得下
+		{"只剩磁盘档", 40 << 20, true, "stream+disk"},     // 硬上限阈值 32MB：52MB 放不下，27MB 放得下
 	}
 	for _, c := range cases {
-		mem := memguard.Memory{Available: c.available, Source: "test"}
-		if got := resolveMode("auto", size, mem); got != c.want {
-			t.Errorf("resolveMode(auto, %d, available=%d) = %s, want %s", size, c.available, got, c.want)
+		plan, spec, _, err := choosePlan(Options{}, memguard.Memory{Available: c.available, Hard: c.hard, Source: "test"}, size)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if spec.Name != c.want {
+			t.Errorf("%s: 选中 %s, want %s（plan=%+v）", c.name, spec.Name, c.want, plan)
 		}
 	}
-	// 显式 full 不受余量影响（用户说了算），但 fullTight 会提示
-	if got := resolveMode("full", size, memguard.Memory{Available: 15 << 20}); got != LoadFull {
-		t.Errorf("显式 full 应保持 full，得到 %s", got)
+}
+
+// 操作者强行指定：full 与 disk 的组合不存在（full 的峰值在 Go 堆，换库不省），
+// 要给出可读的用法错误；单独指定则只剩一档、等于强制。
+func TestForceStrategy(t *testing.T) {
+	if _, _, err := candidates("full", "disk"); err == nil {
+		t.Fatal("full+disk 不是有效档，应报用法错误")
 	}
-	if !fullTight(size, memguard.Memory{Available: 15 << 20, Source: "test"}) {
-		t.Error("15MB 预算下 13MB 的整块解析应被判为逼近预算")
+	cands, forced, err := candidates("full", "")
+	if err != nil || forced != "full+memory" || len(cands) != 1 {
+		t.Fatalf("--load-mode full 应只剩 full+memory：%v %v %v", cands, forced, err)
 	}
-	if fullTight(size, memguard.Memory{Available: 20 << 20, Source: "test"}) {
-		t.Error("20MB 预算有余量，不该提示")
+	cands, forced, err = candidates("", "disk")
+	if err != nil || forced != "stream+disk" || len(cands) != 1 {
+		t.Fatalf("--store disk 应只剩 stream+disk：%v %v %v", cands, forced, err)
 	}
-	if fullTight(size, memguard.Memory{}) {
-		t.Error("预算未知时不该提示")
+	cands, forced, err = candidates("auto", "auto")
+	if err != nil || forced != "" || len(cands) != len(ladder) {
+		t.Fatalf("都不指定应给完整阶梯：%v %v %v", cands, forced, err)
+	}
+}
+
+// --mem-policy strict：连最省档都放不下时直接失败，不试。
+func TestMemPolicyStrictRefuses(t *testing.T) {
+	tiny := uint64(1 << 20)
+	_, _, _, err := choosePlan(Options{MemPolicy: "strict"},
+		memguard.Memory{Available: tiny, Hard: true, Source: "test"}, 512<<20)
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeExec {
+		t.Fatalf("strict 应直接失败：%v", err)
+	}
+	for _, want := range []string{"最省档", "阈值"} {
+		if !strings.Contains(te.Detail, want) {
+			t.Fatalf("detail 缺少 %q：%q", want, te.Detail)
+		}
+	}
+	if !strings.Contains(te.Hint, "--max-memory 0") {
+		t.Fatalf("hint 应给出退出口：%q", te.Hint)
 	}
 }
