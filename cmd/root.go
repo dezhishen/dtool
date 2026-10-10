@@ -77,7 +77,8 @@ func Execute(version string) error {
 	}
 
 	root.SetVersionTemplate("dtool version " + info.Summary() + "\n")
-	root.AddCommand(newVersionCmd(info), newUpgradeCmd(version), newConvertCmd(), newQueryCmd(), newVisualizeCmd(), newPipelineCmd(), newActionsCmd(), newDatasetsCmd())
+	root.AddCommand(newVersionCmd(info), newUpgradeCmd(version), newConvertCmd(), newQueryCmd(),
+		newVisualizeCmd(), newPipelineCmd(), newActionsCmd(), newDatasetsCmd(), newReapCmd())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -134,6 +135,12 @@ func newEnv(ctx context.Context) (*pipeline.Env, error) {
 		if t = strings.TrimSpace(t); t != "" {
 			tags = append(tags, t)
 		}
+	}
+	if !g.noRecord {
+		// 起看护进程：本进程被强杀时由它把遗留的 running 收敛为 stale。
+		// 直接在启动时做，而不是等第一条 Action，这样连「还没写 Action 就被杀」也覆盖不到，
+		// 但要保证有工作区可回写。
+		action.StartReaper(ws)
 	}
 	return &pipeline.Env{
 		Ctx: ctx, WS: ws, Rec: &action.Recorder{WS: ws},

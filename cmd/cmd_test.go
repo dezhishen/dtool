@@ -15,6 +15,7 @@ import (
 // run 以给定参数执行 CLI，返回 stdout、退出错误。
 func run(t *testing.T, args ...string) (map[string]any, error) {
 	t.Helper()
+	t.Setenv("DTOOL_NO_REAPER", "1") // 单测不派生看护进程
 	oldArgs, oldOut := os.Args, os.Stdout
 	r, w, _ := os.Pipe()
 	os.Args, os.Stdout = append([]string{"dtool"}, args...), w
@@ -35,6 +36,7 @@ func run(t *testing.T, args ...string) (map[string]any, error) {
 // runStreams 与 run 相同，但同时捕获 stderr（用于断言提示信息）。
 func runStreams(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	t.Setenv("DTOOL_NO_REAPER", "1")
 	oldArgs, oldStreams := os.Args, [2]*os.File{os.Stdout, os.Stderr}
 	rOut, wOut, _ := os.Pipe()
 	rErr, wErr, _ := os.Pipe()
@@ -142,6 +144,66 @@ func TestActionsSyncCommand(t *testing.T) {
 	}
 	if errMsg, _ := after["error"].(map[string]any)["message"].(string); !strings.Contains(errMsg, "进程已消失") {
 		t.Fatalf("缺少可读原因：%v", after["error"])
+	}
+}
+
+// 看护进程的入口命令：主进程已死时应把遗留的 running 落盘为 stale。
+func TestReapCommandConverges(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := xlsx(t, dir)
+	if _, err := run(t, "convert", "--input", data, "--name", "d"); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, ".dtool", "actions", "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("actions = %v", files)
+	}
+	raw, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a map[string]any
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	a["status"], a["pid"] = "running", 2147480000
+	out, _ := json.Marshal(a)
+	if err := os.WriteFile(files[0], out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 被强杀时 Action 文件与 index.json 会同时停在 running，两处都要改才像真实现场
+	idxPath := filepath.Join(dir, ".dtool", "index.json")
+	raw, err = os.ReadFile(idxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx map[string]any
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range idx["actions"].([]any) {
+		m := e.(map[string]any)
+		m["status"], m["pid"] = "running", 2147480000
+	}
+	out, _ = json.Marshal(idx)
+	if err := os.WriteFile(idxPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := run(t, "__reap", "--workspace", filepath.Join(dir, ".dtool"), "--pid", "2147480000"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(raw, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after["status"] != "stale" {
+		t.Fatalf("__reap 后状态 = %v", after["status"])
 	}
 }
 
