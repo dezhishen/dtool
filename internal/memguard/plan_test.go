@@ -257,3 +257,55 @@ func TestCalibrationIsCapped(t *testing.T) {
 		t.Fatalf("校准倍数应封顶 %.1f：%.2f", maxCalibration, p.Calibration)
 	}
 }
+
+// 余量规则是**硬要求**：预计峰值没超阈值、但超了本档上限（阈值扣掉余量）时必须降档，
+// 而且不能走「擦边值得一试」那条路——整块解析撞上硬上限是不可恢复的崩溃。
+// 这条与文档「整块解析要求峰值 ≤ 预算 80%」严格对应。
+func TestChooseRespectsHeadroomCeiling(t *testing.T) {
+	rungs := []Candidate{
+		{Name: "full+memory", Factor: 13, Base: 32 * mib, RequireHeadroomPercent: 20},
+		{Name: "stream+memory", Factor: 2, Base: 32 * mib},
+	}
+	// 10MiB 输入：full 预计 32+130=162MiB；软预算 200MiB → 阈值 200MiB、上限 160MiB
+	// → 162MiB 超上限（虽然 ≤ 阈值），必须降档
+	p, err := Choose(ChooseRequest{Size: 10 * mib, Memory: Memory{Available: 200 * mib}, Candidates: rungs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Chosen.Name != "stream+memory" {
+		t.Fatalf("超出余量上限时应降档，实际选了 %s：%+v", p.Chosen.Name, p)
+	}
+	if len(p.Rejected) != 1 || !strings.Contains(p.Rejected[0].Why, "20% 余量") ||
+		!strings.Contains(p.Rejected[0].Why, "不接受擦边") {
+		t.Fatalf("被跳过的档要写明余量原因，且不接受擦边：%+v", p.Rejected)
+	}
+	// 预算再松一点（上限 168MiB ≥ 162MiB）就该用回最快的档
+	p, _ = Choose(ChooseRequest{Size: 10 * mib, Memory: Memory{Available: 210 * mib}, Candidates: rungs})
+	if p.Chosen.Name != "full+memory" {
+		t.Fatalf("上限够时应选最快档，实际 %s：%+v", p.Chosen.Name, p)
+	}
+	if !strings.Contains(p.Reason, "20% 余量") {
+		t.Fatalf("选中时也要说明该档要求余量：%q", p.Reason)
+	}
+}
+
+// 输入体积上限：峰值放大不划算的档（整块解析 ×13）在输入过大时直接排除，
+// 即使预算足够（100MB 输入要 1.3GB 峰值，换成流式只有 ~2 倍）。
+func TestChooseSkipsRungOverItsMaxInput(t *testing.T) {
+	rungs := []Candidate{
+		{Name: "full+memory", Factor: 13, MaxInputSize: 32 * mib},
+		{Name: "stream+memory", Factor: 2},
+	}
+	loose := Memory{Available: 8 << 30}
+	p, _ := Choose(ChooseRequest{Size: 31 * mib, Memory: loose, Candidates: rungs})
+	if p.Chosen.Name != "full+memory" {
+		t.Fatalf("31MiB < 上限 32MiB，应选整块解析：%+v", p)
+	}
+	p, _ = Choose(ChooseRequest{Size: 33 * mib, Memory: loose, Candidates: rungs})
+	if p.Chosen.Name != "stream+memory" {
+		t.Fatalf("33MiB ≥ 上限，应降档：%+v", p)
+	}
+	if len(p.Rejected) != 1 || !strings.Contains(p.Rejected[0].Why, "本档上限") {
+		t.Fatalf("要说明体积上限：%+v", p.Rejected)
+	}
+}

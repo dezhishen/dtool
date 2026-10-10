@@ -108,6 +108,92 @@ func TestChooseLadderByBudget(t *testing.T) {
 	}
 }
 
+// 体积规则：整块解析只在输入 <32MB 时考虑（峰值是输入的 13 倍，再大这笔放大不划算）。
+// 这条是文档承诺的「≥32MB 走流式」，与内存预算无关，预算再松也不该选整块解析。
+func TestLadderSizeRule(t *testing.T) {
+	loose := memguard.Memory{Available: 8 << 30, Source: "test"}
+	for _, c := range []struct {
+		size uint64
+		want string
+	}{
+		{31 << 20, "full+memory"},   // 上限之内：用最快的档
+		{33 << 20, "stream+memory"}, // 超过上限：即使预算宽松也走流式
+		{512 << 20, "stream+memory"},
+	} {
+		plan, spec, _, err := choosePlan(Options{}, loose, c.size)
+		if err != nil {
+			t.Fatalf("%d: %v", c.size, err)
+		}
+		if spec.Name != c.want {
+			t.Errorf("%d 字节应选 %s，实际 %s（%s）", c.size, c.want, spec.Name, plan.Reason)
+		}
+	}
+}
+
+// 余量规则：整块解析的预计峰值超了「预算的 80%」就降档（擦着预算跑容易被看门狗中止）。
+func TestLadderFullRequiresHeadroom(t *testing.T) {
+	// 10MiB 输入：full 预计 162MB；软预算 200MB → 上限 160MB → 降档
+	_, spec, _, err := choosePlan(Options{}, memguard.Memory{Available: 200 << 20, Source: "test"}, 10<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "stream+memory" {
+		t.Fatalf("超余量上限应降档，实际 %s", spec.Name)
+	}
+	// 预算 210MB → 上限 168MB ≥ 162MB → 用最快档
+	_, spec, _, err = choosePlan(Options{}, memguard.Memory{Available: 210 << 20, Source: "test"}, 10<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "full+memory" {
+		t.Fatalf("上限够时应选最快档，实际 %s", spec.Name)
+	}
+}
+
+// 预检（meminfo 的 plan 段）与真正执行（query 选档）必须给出同一个档位与理由：
+// 历史上这两条路径各有一套阈值，于是「预检说放得下、跑起来却降档」这种自相矛盾没人发现。
+func TestPreviewMatchesExecution(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "data.json")
+	payload := strings.Repeat("x", 12<<20)
+	if err := os.WriteFile(src, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mem := memguard.Memory{Available: 300 << 20, Source: "test"}
+	pv, err := previewPlan("auto", "auto", "try", mem, filepath.Join(dir, "plans", "samples.json"),
+		map[string]string{"data": src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, spec, _, err := choosePlan(Options{}, mem, uint64(len(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pv.Chosen != spec.Name {
+		t.Fatalf("预检选 %s，执行选 %s", pv.Chosen, spec.Name)
+	}
+	if pv.Predicted != plan.Predicted || pv.Reason != plan.Reason {
+		t.Fatalf("预检与执行的估值/理由不一致：\n预检 %d %q\n执行 %d %q",
+			pv.Predicted, pv.Reason, plan.Predicted, plan.Reason)
+	}
+	if pv.Verdict != "ok" && pv.Verdict != "borderline" && pv.Verdict != "risky" && pv.Verdict != "forced" {
+		t.Fatalf("verdict 取值应在 ok/borderline/risky/forced 内，实际 %q", pv.Verdict)
+	}
+	// ladder 段里正好有一档被标记为选中，且与 chosen 同名
+	n := 0
+	for _, r := range pv.Rungs {
+		if r.Chosen {
+			n++
+			if r.Name != pv.Chosen {
+				t.Fatalf("ladder 标记的选中档 %s 与 plan.chosen %s 不一致", r.Name, pv.Chosen)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("ladder 里应恰好有一档被标记为选中，实际 %d", n)
+	}
+}
+
 // 操作者强行指定：full 与 disk 的组合不存在（full 的峰值在 Go 堆，换库不省），
 // 要给出可读的用法错误；单独指定则只剩一档、等于强制。
 func TestForceStrategy(t *testing.T) {

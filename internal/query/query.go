@@ -51,9 +51,9 @@ const (
 	streamPeakFactor = 2
 	// 实测：加载 0.27×（33MB/123MB）+ 聚合段 0.15×（20MB，临时表落盘后）
 	diskPeakFactor = 0.5
-	// autoStreamSize：体积达到该值时，即使预算够也不选整块解析（100MB 级输入
-	// 整块解析要 1.3GB 峰值，留那么大余量没有意义，不如稳定走流式）。
-	autoStreamSize = 32 << 20
+	// autoFullMaxSize：改用整块解析的输入上限。整块解析峰值是输入的 13 倍，
+	// 大文件即使预算放得下，这笔放大也不划算（流式仅 ~1.4 倍），所以按体积排除。
+	autoFullMaxSize = 32 << 20
 )
 
 // progressMinSize 可在测试中替换。

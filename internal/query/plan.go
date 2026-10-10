@@ -59,7 +59,13 @@ type strategy struct {
 var ladder = []strategy{
 	{Store: StoreMemory, Mode: LoadFull, Candidate: memguard.Candidate{
 		Name: "full+memory", Factor: fullPeakFactor, Base: 32 << 20,
-		Note: "整块解析进内存库（最快，峰值最高）"}},
+		// 峰值是输入的 13 倍：估算擦着阈值过就是等崩，所以要求再留 20% 余量
+		// （旧实现里那条「整块解析 ≤ 预算 80%」的规则就落在这里）
+		RequireHeadroomPercent: 20,
+		// ≥32MB 就走流式：13 倍放大不值得（流式只有 ~1.4 倍），这条与旧的
+		// auto 规则一致，也解释了为什么大文件从来不会选整块解析
+		MaxInputSize: autoFullMaxSize,
+		Note:         "整块解析进内存库（最快，峰值最高；仅 <32MB 且留 20% 余量时选）"}},
 	{Store: StoreMemory, Mode: LoadStream, Candidate: memguard.Candidate{
 		Name: "stream+memory", Factor: streamPeakFactor, Base: 32 << 20,
 		Note: "流式装入内存库（默认）"}},

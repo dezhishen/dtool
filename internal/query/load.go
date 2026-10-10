@@ -42,7 +42,7 @@ func ParseLoadMode(s string) (LoadMode, error) {
 		return LoadFull, nil
 	}
 	return "", types.Errorf(types.CodeUsage, "invalid load mode %q", s).
-		WithHint("可选：auto（按文件大小自适应）/ stream（流式，省内存）/ full（整块解析，快）")
+		WithHint("可选：auto（按内存预算在 full/stream/磁盘档之间选）/ stream（流式，省内存）/ full（整块解析，快，要求更多余量）")
 }
 
 // Preview 是「不真正加载」的装入预演：每档预计多少、会不会被选中。
@@ -72,7 +72,7 @@ type LadderPreview struct {
 	Threshold uint64        `json:"threshold"`
 	Risky     bool          `json:"risky"`
 	Forced    bool          `json:"forced"`
-	Verdict   string        `json:"verdict"` // ok / borderline / risky / refused
+	Verdict   string        `json:"verdict"` // ok / borderline / risky / forced
 }
 
 // RungPreview 是单个执行档的预演数据。

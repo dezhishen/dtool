@@ -26,7 +26,27 @@ type Candidate struct {
 	Name   string  `json:"name"`
 	Factor float64 `json:"factor"`
 	Base   uint64  `json:"base"`
-	Note   string  `json:"note,omitempty"`
+	// RequireHeadroomPercent：这一档要求额外留出的余量（占阈值的百分比）。
+	// 用于「峰值比输入大一个数量级」的档（整块解析 ×13）：估算擦着阈值通过时，
+	// 估错的方向是崩溃，所以要在预算里再留一截。倍率越激进，留得越多。
+	RequireHeadroomPercent int `json:"require_headroom_percent,omitempty"`
+	// MaxInputSize：这一档允许的输入体积上限（0 = 不限）。用于「峰值放大不划算」的档：
+	// 整块解析是输入的 13 倍，100MB 输入就要 1.3GB 峰值——即使预算放得下，这笔放大也
+	// 不值得（换成流式峰值只有 1.4 倍），所以按体积直接排除。
+	MaxInputSize uint64 `json:"max_input_size,omitempty"`
+	Note         string `json:"note,omitempty"`
+}
+
+// ceiling 返回这一档实际允许的峰值上限（阈值扣除它要求的余量）。
+func (c Candidate) ceiling(threshold uint64) uint64 {
+	if threshold == 0 || c.RequireHeadroomPercent <= 0 {
+		return threshold
+	}
+	h := c.RequireHeadroomPercent
+	if h >= 100 {
+		h = 99
+	}
+	return threshold * uint64(100-h) / 100
 }
 
 // Predicted 按输入体积估算该档峰值。
@@ -175,31 +195,51 @@ func Choose(r ChooseRequest) (Plan, error) {
 	leanest := r.Candidates[len(r.Candidates)-1]
 	for _, c := range r.Candidates {
 		p := r.plan(c)
-		if p.Predicted <= p.Threshold {
+		if c.MaxInputSize > 0 && r.Size > c.MaxInputSize {
+			rejected = append(rejected, Rejected{Name: c.Name, Predicted: p.Predicted, Threshold: p.Threshold,
+				Chance: p.Chance,
+				Why: fmt.Sprintf("输入 %s ≥ 本档上限 %s：峰值放大 %d 倍不划算，改走更省的档",
+					HumanSize(r.Size), HumanSize(c.MaxInputSize), int(c.Factor))})
+			continue
+		}
+		limit := c.ceiling(p.Threshold)
+		if p.Predicted <= limit {
 			calib := ""
 			if p.Calibration > 1 {
 				calib = fmt.Sprintf("（按本档历史实测上修 ×%.1f，%d 条样本）", p.Calibration, p.CalibSamples)
 			}
+			margin := ""
+			if c.RequireHeadroomPercent > 0 {
+				margin = fmt.Sprintf("（该档要求留 %d%% 余量，上限 %s）",
+					c.RequireHeadroomPercent, HumanSize(limit))
+			}
 			if len(rejected) > 0 {
-				p.Reason = fmt.Sprintf("预计峰值 %s%s ≤ 阈值 %s，放得下",
-					HumanSize(p.Predicted), calib, HumanSize(p.Threshold))
+				p.Reason = fmt.Sprintf("预计峰值 %s%s ≤ 阈值 %s%s，放得下",
+					HumanSize(p.Predicted), calib, HumanSize(p.Threshold), margin)
 			} else {
-				p.Reason = fmt.Sprintf("最快档且预计峰值 %s%s ≤ 阈值 %s",
-					HumanSize(p.Predicted), calib, HumanSize(p.Threshold))
+				p.Reason = fmt.Sprintf("最快档且预计峰值 %s%s ≤ 阈值 %s%s",
+					HumanSize(p.Predicted), calib, HumanSize(p.Threshold), margin)
 			}
 			p.Rejected = rejected
 			return p, nil
 		}
-		if p.Chance >= minChance {
+		// 要求留余量的档不接受「擦边试跑」：这条余量是硬要求（估算擦着预算通过时，
+		// 实际很容易在中途被看门狗中止，而整块解析撞上硬上限是不可恢复的）。
+		if c.RequireHeadroomPercent == 0 && p.Chance >= minChance {
 			p.Reason = fmt.Sprintf("预计放不下（%s > 阈值 %s），但历史成功率 %.0f%% ≥ %.0f%%，值得一试",
 				HumanSize(p.Predicted), HumanSize(p.Threshold), p.Chance*100, minChance*100)
 			p.Rejected = rejected
 			return p, nil
 		}
+		why := fmt.Sprintf("预计 %s > 阈值 %s，成功率仅 %.0f%%",
+			HumanSize(p.Predicted), HumanSize(p.Threshold), p.Chance*100)
+		if limit != p.Threshold {
+			why = fmt.Sprintf("预计 %s > 上限 %s（阈值 %s 留 %d%% 余量，不接受擦边试跑）",
+				HumanSize(p.Predicted), HumanSize(limit), HumanSize(p.Threshold),
+				c.RequireHeadroomPercent)
+		}
 		rejected = append(rejected, Rejected{Name: c.Name, Predicted: p.Predicted,
-			Threshold: p.Threshold, Chance: p.Chance,
-			Why: fmt.Sprintf("预计 %s > 阈值 %s，成功率仅 %.0f%%",
-				HumanSize(p.Predicted), HumanSize(p.Threshold), p.Chance*100)})
+			Threshold: p.Threshold, Chance: p.Chance, Why: why})
 	}
 
 	p := r.plan(leanest)

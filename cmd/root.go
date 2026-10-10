@@ -63,7 +63,7 @@ func Execute(version string) error {
 	pf.IntVar(&g.previewRows, "preview-rows", 20, "Action 预览行数")
 	pf.BoolVar(&g.noRecord, "no-record", false, "跳过 Action 记录")
 	pf.StringVar(&g.maxMemory, "max-memory", "", "内存预算（如 1.5G）；默认自动探测 cgroup/系统可用内存，0 表示关闭检查")
-	pf.StringVar(&g.loadMode, "load-mode", "auto", "JSON 装入方式：auto 按文件大小自适应 / stream 流式（省内存）/ full 整块解析（快）")
+	pf.StringVar(&g.loadMode, "load-mode", "auto", "JSON 装入方式：auto 按内存预算选执行档（快到省）/ stream 流式（省内存）/ full 整块解析（快，要求更多余量）")
 	pf.StringVar(&g.store, "store", "auto", "SQLite 库落在哪：auto 按内存预算自适应 / memory 内存库（快）/ disk 磁盘库（峰值低，硬上限下更稳）")
 	pf.StringVar(&g.memPolicy, "mem-policy", "try", "所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败")
 
