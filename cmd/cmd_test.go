@@ -505,10 +505,14 @@ func TestDatasetsListShowDeleteAndRef(t *testing.T) {
 func TestUpdateFlagsValidateBeforeAnyNetworkAccess(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cases := [][]string{
-		{"--pre"}, // --pre 必须配合 --update
-		{"upgrade", "--version", "not-a-version"},  // 版本号格式错误
-		{"upgrade", "--version", "1.0.0", "--pre"}, // 二者互斥
-		{"upgrade", "extra"},                       // 不接受位置参数
+		{"--pre"},                                             // --pre 必须配合 --update
+		{"--channel", "dev"},                                  // --channel 必须配合 --update / upgrade
+		{"--update", "--channel", "bogus"},                    // 渠道名非法
+		{"--update", "--channel", "dev", "--pre"},             // 渠道与 --pre 冲突
+		{"upgrade", "--version", "1.0.0", "--channel", "dev"}, // 指定版本与渠道互斥
+		{"upgrade", "--version", "not-a-version"},             // 版本号格式错误
+		{"upgrade", "--version", "1.0.0", "--pre"},            // 二者互斥
+		{"upgrade", "extra"},                                  // 不接受位置参数
 	}
 	for _, args := range cases {
 		m, err := run(t, args...)

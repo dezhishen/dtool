@@ -58,6 +58,7 @@ type rel struct {
 	prerelease bool
 	draft      bool
 	assets     map[string][]byte // 资产名 -> 内容
+	name       string            // 发布标题（dev 发布用它放构建号）
 	badSum     bool
 }
 
@@ -73,7 +74,7 @@ func fakeGitHub(t *testing.T, rels []rel) *Updater {
 		for name := range r.assets {
 			assets = append(assets, map[string]any{"name": name, "browser_download_url": srv.URL + "/dl/" + r.tag + "/" + name})
 		}
-		return map[string]any{"tag_name": r.tag, "prerelease": r.prerelease, "draft": r.draft,
+		return map[string]any{"tag_name": r.tag, "name": r.name, "prerelease": r.prerelease, "draft": r.draft,
 			"html_url": srv.URL + "/rel/" + r.tag, "assets": assets}
 	}
 	mux.HandleFunc("/repos/o/r/releases", func(w http.ResponseWriter, _ *http.Request) {
@@ -102,7 +103,7 @@ func release(t *testing.T, tag, os_ string, content string, mut ...func(*rel)) r
 	v, _ := ParseVersion(tag)
 	r := rel{tag: tag, prerelease: v.Prerelease(), assets: map[string][]byte{}}
 	u := &Updater{OS: os_, Arch: "amd64"}
-	name := u.assetName(v)
+	name := u.assetName(v.String())
 	var arch []byte
 	if os_ == "windows" {
 		arch = zipOf(t, "dtool.exe", []byte(content))
@@ -594,5 +595,135 @@ func TestRetryableNetClassification(t *testing.T) {
 		if retryableNet(errors.New(msg)) {
 			t.Fatalf("%q 不该重试", msg)
 		}
+	}
+}
+
+// devRelease 构造滚动 dev 发布：固定 tag `dev`、资产名固定（可覆盖上传）、
+// 构建号放在 dev-build.txt（权威）与发布标题里。
+func devRelease(t *testing.T, buildID string, content string) rel {
+	t.Helper()
+	arch := tarGz(t, "dtool", []byte(content))
+	sum := sha256.Sum256(arch)
+	name := "dtool_dev_linux_amd64.tar.gz"
+	return rel{tag: "dev", name: buildID, prerelease: true, assets: map[string][]byte{
+		name:            arch,
+		"dev-build.txt": []byte(buildID + "\n" + strings.Repeat("a", 40) + "\n2026-10-10T00:00:00Z\n"),
+		"checksums.txt": []byte(fmt.Sprintf("%s  ./%s\n", hex.EncodeToString(sum[:]), name)),
+	}}
+}
+
+// dev 渠道：比的是构建身份（不是版本大小），dev-build.txt 里的构建号说了算。
+func TestCheckDevChannel(t *testing.T) {
+	u := fakeGitHub(t, []rel{release(t, "v1.0.0", "linux", "STABLE"), devRelease(t, "dev-38043572835", "DEV")})
+	u.Current, u.OS, u.Arch = "dev-38043572835", "linux", "amd64"
+
+	// 同一个构建（版本串相同）→ 不需要升级
+	res, err := u.CheckChannel(context.Background(), ChannelDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Channel != "dev" || res.Latest != "dev-38043572835" || res.UpdateAvailable {
+		t.Fatalf("同一构建不该报可升级：%+v", res)
+	}
+	if !strings.Contains(res.Hint, "最新 dev 构建") {
+		t.Fatalf("提示要说明已是最新：%q", res.Hint)
+	}
+
+	// 旧构建：本地是 dev-100，发布里是 dev-38043572835
+	u.Current = "dev-100"
+	res, err = u.CheckChannel(context.Background(), ChannelDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.UpdateAvailable {
+		t.Fatalf("旧 dev 构建应报可升级：%+v", res)
+	}
+	if !strings.Contains(res.Hint, "--channel dev") {
+		t.Fatalf("提示应给出渠道参数：%q", res.Hint)
+	}
+
+	// 只靠 build_id 也能认出来（本地版本串被抹掉的情形，例如从 dev 发布装的二进制）
+	u.Current, u.BuildID = "", "38043572835"
+	res, err = u.CheckChannel(context.Background(), ChannelDev)
+	if err != nil || res.UpdateAvailable {
+		t.Fatalf("build_id 相同应视为同一构建：%+v %v", res, err)
+	}
+}
+
+// dev 渠道升级：资产名固定（dtool_dev_<os>_<arch>），自检用构建号。
+func TestUpgradeDevChannel(t *testing.T) {
+	u := fakeGitHub(t, []rel{devRelease(t, "dev-38043572835", "DEV-BINARY")})
+	u.Current, u.OS, u.Arch = "dev-100", "linux", "amd64"
+	exe := installedExe(t, "OLD")
+	u.Exe, u.Verify = exe, nil
+
+	res, err := u.Upgrade(context.Background(), UpgradeOptions{Channel: ChannelDev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Upgraded || res.To != "dev-38043572835" {
+		t.Fatalf("应升级到 dev 构建：%+v", res)
+	}
+	if got := read(t, exe); got != "DEV-BINARY" {
+		t.Fatalf("二进制未替换：%q", got)
+	}
+
+	// 再跑一次：同一构建 → 不升级（幂等）。真实场景里这是「装完后重启再跑」，
+	// 所以把 Updater 看到的当前版本同步成新装的构建号。
+	u.Current = "dev-38043572835"
+	res, err = u.Upgrade(context.Background(), UpgradeOptions{Channel: ChannelDev})
+	if err != nil || res.Upgraded {
+		t.Fatalf("同一构建不该重复升级：%+v %v", res, err)
+	}
+}
+
+// dev 发布不能污染 stable / preview 渠道：它的 tag 不是版本号，选版时会自然跳过。
+func TestDevReleaseDoesNotLeakIntoOtherChannels(t *testing.T) {
+	u := fakeGitHub(t, []rel{
+		release(t, "v1.0.0", "linux", "STABLE"),
+		release(t, "v1.1.0-preview.1", "linux", "PREVIEW"),
+		devRelease(t, "dev-38043572835", "DEV"),
+	})
+	u.Current = "1.0.0"
+
+	res, err := u.CheckChannel(context.Background(), ChannelPreview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Latest != "1.1.0-preview.1" {
+		t.Fatalf("preview 渠道不该看到 dev 发布：%+v", res)
+	}
+	res, err = u.CheckChannel(context.Background(), ChannelStable)
+	if err != nil || res.Latest != "1.0.0" {
+		t.Fatalf("stable 渠道应只看正式版：%+v %v", res, err)
+	}
+}
+
+// 没有 dev 发布时要给出可读的错误与换渠道建议。
+func TestDevChannelWithoutRelease(t *testing.T) {
+	u := fakeGitHub(t, []rel{release(t, "v1.0.0", "linux", "STABLE")})
+	u.Current = "dev-1"
+	_, err := u.CheckChannel(context.Background(), ChannelDev)
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeNotFound {
+		t.Fatalf("应报 not found：%v", err)
+	}
+	if !strings.Contains(te.Hint, "--channel preview") {
+		t.Fatalf("提示应给出换渠道的出口：%q", te.Hint)
+	}
+}
+
+// `--version dev-<id>`：只认滚动发布里那一个构建，别的 id 直接拒绝（避免用户以为能装历史构建）。
+func TestUpgradeExplicitDevBuildID(t *testing.T) {
+	u := fakeGitHub(t, []rel{devRelease(t, "dev-38043572835", "DEV")})
+	u.Current, u.OS, u.Arch = "dev-1", "linux", "amd64"
+	u.Exe, u.Verify = installedExe(t, "OLD"), nil
+
+	if _, err := u.Upgrade(context.Background(), UpgradeOptions{Version: "dev-999"}); err == nil {
+		t.Fatal("滚动发布里没有的 dev 构建应报错")
+	}
+	res, err := u.Upgrade(context.Background(), UpgradeOptions{Version: "dev-38043572835"})
+	if err != nil || !res.Upgraded {
+		t.Fatalf("指定当前滚动构建应能升级：%+v %v", res, err)
 	}
 }

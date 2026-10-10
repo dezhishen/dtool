@@ -68,14 +68,19 @@ func Execute(version string) error {
 	pf.StringVar(&g.memPolicy, "mem-policy", "try", "所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败")
 
 	var checkUpdate, pre bool
-	root.Flags().BoolVar(&checkUpdate, "update", false, "检查是否有新版本（不安装；配合 --pre 包含预览版）")
-	root.Flags().BoolVar(&pre, "pre", false, "与 --update 配合：包含预览版")
+	var channel string
+	root.Flags().BoolVar(&checkUpdate, "update", false, "检查是否有新版本（不安装；配合 --channel/--pre 选择渠道）")
+	root.Flags().BoolVar(&pre, "pre", false, "与 --update 配合：包含预览版（等价于 --channel preview）")
+	root.Flags().StringVar(&channel, "channel", "", "与 --update 配合的升级渠道：stable / preview / dev")
 	root.RunE = func(c *cobra.Command, _ []string) error {
 		if pre && !checkUpdate {
 			return types.Errorf(types.CodeUsage, "--pre 需与 --update 一起使用")
 		}
+		if channel != "" && !checkUpdate {
+			return types.Errorf(types.CodeUsage, "--channel 需与 --update 或 upgrade 一起使用")
+		}
 		if checkUpdate {
-			return runCheckUpdate(c, version, pre)
+			return runCheckUpdate(c, version, channel, pre)
 		}
 		return c.Help()
 	}

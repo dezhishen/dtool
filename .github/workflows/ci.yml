@@ -66,12 +66,18 @@ jobs:
       - name: 交叉编译（无 CGO）
         run: make build-all release-build VERSION=ci
 
-  # 推送到 main：测试通过后产出各平台可执行文件，作为 workflow artifact 供测试下载。
-  # 不创建 tag/Release，因此不会被 `dtool --update` 检测到；版本号为 dev-<run id>，并嵌入 commit 等元数据。
+  # 推送到 main：测试通过后产出各平台可执行文件，并更新**滚动 dev 发布**（tag `dev`）。
+  #
+  # 为什么发 Release 而不是只发 workflow artifact：`dtool upgrade --channel dev` 走的是
+  # GitHub Releases API，artifact 它读不到（需要 token、且是 zip）。dev 发布刻意用**固定
+  # 资产名** + `--clobber` 覆盖：dev 的语义是「main 的最新状态」，不需要按次留档，也就不必
+  # 为此做清理策略；构建号放在 dev-build.txt 里（权威），资产名保持稳定才可覆盖。
   dev-build:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test, lint]
     runs-on: ubuntu-26.04
+    permissions:
+      contents: write # 需要写 Release（滚动 dev 发布）
     env:
       DEV_VERSION: dev-${{ github.run_id }}
     steps:
@@ -92,6 +98,25 @@ jobs:
           grep -q "\"build_id\": \"${GITHUB_RUN_ID}\"" <<<"$out"
           grep -q "\"builder\": \"github-actions\"" <<<"$out"
           /tmp/smoke/dtool --version | grep -q "${DEV_VERSION}"
+      - name: 改成滚动 dev 发布的固定资产名
+        # 逻辑在 scripts/dev-release-assets.sh（有单测：scripts/tests/dev-release-assets.test.sh）
+        run: BUILD_ID="$GITHUB_RUN_ID" COMMIT="$GITHUB_SHA" bash scripts/dev-release-assets.sh dist "$DEV_VERSION"
+
+      - name: 更新滚动 dev 发布（tag dev）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$(printf 'main 的最新构建（滚动发布：资产每次构建覆盖，只保留最新一次）\n\n- 版本: %s\n- commit: %s\n- 构建: %s/actions/runs/%s\n' \
+            "$DEV_VERSION" "$GITHUB_SHA" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "$GITHUB_RUN_ID")"
+          if ! gh release view dev >/dev/null 2>&1; then
+            gh release create dev --prerelease --latest=false --title "$DEV_VERSION" --notes "$notes"
+          fi
+          gh release edit dev --title "$DEV_VERSION" --notes "$notes"
+          gh release upload dev dist/* --clobber
+          gh release view dev --json tagName,name,assets --jq '.tagName, .name, (.assets[].name)'
+
+      # 同时保留 workflow artifact：人工排查、离线取用时不依赖 Release
       - uses: actions/upload-artifact@v7
         with:
           name: dtool-${{ env.DEV_VERSION }}

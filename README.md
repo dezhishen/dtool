@@ -241,11 +241,26 @@ Windows 上若 Job Object 只置了标志位、值读回 0（`job_object.limit_u
 
 ## 检查更新与升级
 
+三个渠道，`--channel` 选（`--pre` 是 `--channel preview` 的旧写法）：
+
+| 渠道 | 含义 | 例子 |
+|---|---|---|
+| `stable`（默认） | 最新正式版 / 补丁版 | `dtool upgrade` |
+| `preview` | 正式版 + 预览版（`vX.Y.0-preview.N`） | `dtool upgrade --channel preview`（或 `--pre`） |
+| `dev` | **main 的最新构建**（滚动发布） | `dtool upgrade --channel dev` |
+
 ```bash
-dtool --update [--pre]                      # 只检查是否有新版本（--pre 包含预览版）
-dtool upgrade [--pre]                       # 升级到最新版本
-dtool upgrade --version 1.2.0               # 指定版本（可降级）；预览版如 1.2.0-preview.1
+dtool --update [--channel stable|preview|dev]   # 只检查，不改动任何文件
+dtool upgrade [--channel dev]                   # 升级到该渠道的最新版
+dtool upgrade --version 1.2.0                   # 指定版本（可降级）；预览版如 1.2.0-preview.1
+dtool upgrade --version dev                     # dev 构建也可显式指定（滚动发布只保留最新一次）
 ```
+
+`dev` 渠道的特殊之处：dev 构建之间**没有版本序**（`dev-<run id>` 不是语义化版本），所以
+它比的是**构建身份**——发布里的 `dev-build.txt` 记着当前构建号，和二进制里的
+`version`/`build_id` 一致就认为已是最新，不会因为「版本号看起来更小」而反复重装或降级。
+dev 发布是**滚动**的（固定 tag `dev`，每次 main 构建覆盖同名资产），因此不会堆出成百上千个
+Release，也不需要额外的清理策略。
 
 升级前会校验 Release 中 `checksums.txt` 的 sha256，并先运行新二进制自检；任何一步失败都不会改动现有文件。Windows 下运行中的 exe 不能覆盖，因此先把旧文件改名为 `.old` 再让新文件就位（失败回滚，`.old` 下次启动自动清理）。GitHub 限流时设置 `GITHUB_TOKEN`；`DTOOL_REPO` / `DTOOL_UPDATE_API` 可指向镜像。
 

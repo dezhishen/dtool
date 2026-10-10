@@ -970,6 +970,17 @@ Chance = (n·经验CDF + 先验权重3·正态CDF(ratio~N(0.85, 0.30))) / (n + 3
 ratio 的 P10/P50/P90、耗时中位数）。fatal 崩溃时进程什么都不剩，只有这份记录还在——
 它是「同一个输入只付一次试错代价」的载体。
 
+**升级渠道（8.8.1）**：`stable` / `preview` / `dev` 三选一，`--channel` 指定（`--pre` 是
+`preview` 的旧写法）。前两个渠道比版本号（`vX.Y.Z` / `-preview.N`），`dev` 渠道比**构建身份**：
+dev 构建之间没有版本序，硬比大小会出现「装完又说有新版」或「悄悄降级」。
+
+为此 dev 产物必须发成 **Release 资产**（updater 走 Releases API，读不到 workflow artifact），
+且用**滚动发布**：固定 tag `dev`，每次 main 构建把同名资产 `--clobber` 覆盖，
+构建号写在 `dev-build.txt` 第一行（权威），发布标题同步为 `dev-<run id>`。
+资产名固定（`dtool_dev_<os>_<arch>.<ext>`）与「构建号必须能区分构建」是一对矛盾：
+前者为了覆盖上传，后者交给 `dev-build.txt`——改名后必须**重算 checksums.txt**
+（升级端按资产名查哈希），这段逻辑落在 `scripts/dev-release-assets.sh` 并有单测。
+
 **操作者可强行指定**：`--load-mode`（`full`/`stream`）与 `--store`（`memory`/`disk`）
 两个正交开关；都留 `auto` 时走阶梯。只剩一档时视为强制（理由里写明「操作者指定」），
 强制档即使预计会崩也会执行——排查需要，且失败会被完整记录。

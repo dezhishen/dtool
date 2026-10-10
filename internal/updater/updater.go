@@ -31,6 +31,10 @@ const (
 	maxArchive    = 200 << 20
 	maxBinary     = 400 << 20
 	checksumsName = "checksums.txt"
+	// defaultDevTag：滚动 dev 发布的 tag（`dtool upgrade --channel dev` 的目标）。
+	defaultDevTag = "dev"
+	// devBuildAsset：dev 发布里记录构建号的小文件（见 CI 的 dev-build 任务）。
+	devBuildAsset = "dev-build.txt"
 
 	// 网络重试：GitHub API 与资产下载经常遇到瞬断（EOF / connection reset / 5xx），
 	// 退避按指数增长（base、2×base、4×base…），封顶 maxRetryDelay。
@@ -44,6 +48,8 @@ type Updater struct {
 	APIBase    string
 	Client     *http.Client
 	Current    string // 当前版本，可带 v；非发版构建（如 dev）视为未知
+	BuildID    string // 当前二进制的 CI 运行号（dev 渠道靠它判断「是不是同一个构建」）
+	DevTag     string // 滚动 dev 发布的 tag，空取 defaultDevTag（DTOOL_DEV_TAG 可覆盖）
 	OS, Arch   string
 	Exe        string // 要替换的可执行文件，空则取当前进程
 	Token      string
@@ -96,6 +102,7 @@ type ghAsset struct {
 
 type ghRelease struct {
 	TagName     string    `json:"tag_name"`
+	Name        string    `json:"name"`
 	Prerelease  bool      `json:"prerelease"`
 	Draft       bool      `json:"draft"`
 	HTMLURL     string    `json:"html_url"`
@@ -106,6 +113,7 @@ type ghRelease struct {
 
 type CheckResult struct {
 	Current         string    `json:"current"`
+	Channel         string    `json:"channel"` // stable / preview / dev
 	Latest          string    `json:"latest"`
 	UpdateAvailable bool      `json:"update_available"`
 	Prerelease      bool      `json:"prerelease"`
@@ -115,8 +123,9 @@ type CheckResult struct {
 }
 
 type UpgradeOptions struct {
-	Version string // 指定版本；空则取最新
-	Pre     bool   // 最新版是否包含预览版
+	Version string  // 指定版本；空则取最新。dev 渠道可写 dev / dev-<run id>
+	Pre     bool    // 兼容旧参数：等价于 Channel=preview
+	Channel Channel // stable / preview / dev；空按 Pre 推断，再默认 stable
 }
 
 type UpgradeResult struct {
@@ -331,31 +340,52 @@ func (u *Updater) current() (Version, bool) {
 	return v, err == nil
 }
 
-// Check 仅检查是否有新版本，不修改任何文件。
+// Check 仅检查是否有新版本，不修改任何文件（pre=true 等价于 --channel preview）。
 func (u *Updater) Check(ctx context.Context, pre bool) (*CheckResult, error) {
-	r, err := u.latest(ctx, pre)
+	ch := ChannelStable
+	if pre {
+		ch = ChannelPreview
+	}
+	return u.CheckChannel(ctx, ch)
+}
+
+// CheckChannel 按渠道检查更新。dev 渠道比较的是「构建身份」而不是版本大小：
+// `dev-<run id>` 之间没有版本序，只能判断目标构建号与当前二进制是否同一个。
+func (u *Updater) CheckChannel(ctx context.Context, ch Channel) (*CheckResult, error) {
+	t, err := u.resolve(ctx, ch, "")
 	if err != nil {
 		return nil, err
 	}
-	res := &CheckResult{Current: strings.TrimPrefix(u.Current, "v"), Latest: r.version.String(),
-		Prerelease: r.version.Prerelease(), ReleaseURL: r.HTMLURL, PublishedAt: r.PublishedAt}
+	res := &CheckResult{Current: strings.TrimPrefix(u.Current, "v"), Channel: string(t.channel),
+		Latest: t.expect, Prerelease: t.channel != ChannelStable,
+		ReleaseURL: t.rel.HTMLURL, PublishedAt: t.rel.PublishedAt}
+	if t.channel == ChannelDev {
+		res.UpdateAvailable = !u.sameBuild(t)
+		if res.UpdateAvailable {
+			res.Hint = "运行 `dtool upgrade --channel dev` 升级到 main 的最新构建"
+		} else {
+			res.Hint = "已是 main 的最新 dev 构建"
+		}
+		return res, nil
+	}
 	cur, ok := u.current()
-	res.UpdateAvailable = !ok || r.version.Compare(cur) > 0
+	res.UpdateAvailable = !ok || t.rel.version.Compare(cur) > 0
 	switch {
 	case !ok:
 		res.Hint = "当前为非发版构建，无法比较版本；运行 `dtool upgrade` 升级"
 	case res.UpdateAvailable:
-		res.Hint = "运行 `dtool upgrade" + map[bool]string{true: " --pre"}[pre] + "` 升级"
+		res.Hint = "运行 `dtool upgrade" + map[bool]string{true: " --pre"}[ch.pre()] + "` 升级"
 	}
 	return res, nil
 }
 
-func (u *Updater) assetName(v Version) string {
+// assetName 按版本串拼资产名（dev 渠道传 "dev"：资产名必须稳定，才能覆盖上传）。
+func (u *Updater) assetName(version string) string {
 	ext := ".tar.gz"
 	if u.OS == "windows" {
 		ext = ".zip"
 	}
-	return fmt.Sprintf("dtool_%s_%s_%s%s", v.String(), u.OS, u.Arch, ext)
+	return fmt.Sprintf("dtool_%s_%s_%s%s", version, u.OS, u.Arch, ext)
 }
 
 func (u *Updater) binName() string {
@@ -472,26 +502,30 @@ func (u *Updater) exePath() (string, error) {
 
 // Upgrade 下载、校验并替换当前可执行文件。
 func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult, error) {
-	var rel *ghRelease
-	if o.Version != "" {
-		want, err := ParseVersion(o.Version)
-		if err != nil {
-			return nil, types.Errorf(types.CodeUsage, "%v", err)
-		}
-		rel = &ghRelease{}
-		if err := u.apiJSON(ctx, u.tagPath(want.Tag()), rel); err != nil {
-			return nil, err
-		}
-		rel.version = want
-	} else {
-		var err error
-		if rel, err = u.latest(ctx, o.Pre); err != nil {
-			return nil, err
+	ch := o.Channel
+	if ch == "" {
+		ch = ChannelStable
+		if o.Pre {
+			ch = ChannelPreview
 		}
 	}
+	if _, err := ParseChannel(string(ch)); err != nil {
+		return nil, err
+	}
+	t, err := u.resolve(ctx, ch, o.Version)
+	if err != nil {
+		return nil, err
+	}
+	rel := t.rel
 
-	res := &UpgradeResult{Success: true, From: strings.TrimPrefix(u.Current, "v"), To: rel.version.String(), ReleaseURL: rel.HTMLURL}
-	if cur, ok := u.current(); ok {
+	res := &UpgradeResult{Success: true, From: strings.TrimPrefix(u.Current, "v"), To: t.expect,
+		ReleaseURL: rel.HTMLURL}
+	if t.channel == ChannelDev {
+		if u.sameBuild(t) {
+			res.Message = "已是 main 的最新 dev 构建，无需升级"
+			return res, nil
+		}
+	} else if cur, ok := u.current(); ok {
 		if c := rel.version.Compare(cur); c == 0 || (c < 0 && o.Version == "") {
 			res.Message = "已是最新版本，无需升级"
 			if c < 0 {
@@ -501,14 +535,14 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 		}
 	}
 
-	name := u.assetName(rel.version)
+	name := u.assetName(t.assetV)
 	asset, sums := findAsset(rel, name), findAsset(rel, checksumsName)
 	if asset == nil {
-		return nil, types.Errorf(types.CodeNotFound, "release %s has no asset for %s/%s", rel.version.Tag(), u.OS, u.Arch).
+		return nil, types.Errorf(types.CodeNotFound, "release %s has no asset for %s/%s", rel.TagName, u.OS, u.Arch).
 			WithDetail("expected asset: " + name)
 	}
 	if sums == nil {
-		return nil, types.Errorf(types.CodeExec, "release %s has no %s; refusing to install unverified binary", rel.version.Tag(), checksumsName)
+		return nil, types.Errorf(types.CodeExec, "release %s has no %s; refusing to install unverified binary", rel.TagName, checksumsName)
 	}
 
 	exe, err := u.exePath()
@@ -565,7 +599,8 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 		return nil, err
 	}
 	if u.Verify != nil {
-		if err := u.Verify(tmpPath, rel.version.String()); err != nil {
+		// 自检用目标构建号（dev 渠道的二进制里嵌的是 `dev-<run id>`，不是资产名里的 dev）
+		if err := u.Verify(tmpPath, t.expect); err != nil {
 			return nil, types.Errorf(types.CodeExec, "%v", err)
 		}
 	}
@@ -576,6 +611,6 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 			WithHint("Windows 下请先关闭其他正在运行的 dtool 进程与占用该文件的程序后重试")
 	}
 	res.Upgraded, res.Path = true, exe
-	res.Message = fmt.Sprintf("已升级到 %s", rel.version.Tag())
+	res.Message = fmt.Sprintf("已升级到 %s", t.expect)
 	return res, nil
 }
