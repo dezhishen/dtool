@@ -327,6 +327,11 @@ dtool upgrade --skills=~/.claude/skills/dtool/SKILL.md   # 从发布归档里取
 最后一条是给"已经装了 dtool"的场景：手册和二进制来自同一份发布、同一次 sha256 校验，
 不会出现「二进制是 0.2.0、手册是 main」。裸 `--skills` 等价于写到当前目录的 `./SKILL.md`。
 
+反向不成立：**`v0.2.0` 的旧二进制不认识新归档里的 `SKILL.md`**（那时候它只按 `skills.md` 找），
+所以「0.2.0 的 dtool + `--skills` + 0.2.1 的归档」会报「归档里没有 skills.md」——而且**不会替换
+二进制**（手册在替换之前写，失败即中止，不留半成品）。做法很简单：先不带 `--skills` 升级一次，
+之后新二进制就能正常取手册了。
+
 ## 中文图表与配置文件
 
 字体优先级：`--font` > `-c config.yaml` 的 `font` > `DTOOL_FONT` > 自动发现的系统中文字体（支持 `.ttf`/`.ttc`）。

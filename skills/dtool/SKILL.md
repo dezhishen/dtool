@@ -36,6 +36,8 @@ dtool version                                        # 确认可用（含 versio
   （目录不存在会创建）。手册取自发布归档（与二进制同一次 sha256 校验），不会出现「二进制旧、手册新」；
   已经是最新版本时也能单独取（不碰二进制），`skills_changed` 说明内容有没有变。
   v0.2.0 及以前的归档里它叫 `skills.md`，两种名字都能取到，落点统一成 `SKILL.md`。
+  反向不成立：v0.2.0 的旧二进制只按 `skills.md` 找，遇到 0.2.1+ 的归档会报「归档里没有
+  skills.md」且不替换二进制——先不带 `--skills` 升级一次即可。
 - **只有预览 tag 时加 `--pre`**，否则预览版不算可升级版本；不确定当前构建类型看 `dtool version` 的 `channel`（stable/preview/dev/local）。
 
 ## 核心概念
