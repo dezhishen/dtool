@@ -1,16 +1,18 @@
 name: Dev Release
 
-# dev 是**滚动发布**（固定 tag `dev`，资产每次覆盖），三种触发方式：
-#   push      main 有新提交时立刻发（最常见的路径）
-#   schedule  每 4 小时兜底一次（cron 为 UTC）：catch 漏掉的构建，也让 dev 与 main 保持同步
-#   dispatch  手动触发，可 force=true 强制重发（例如资产损坏、或想固定一个构建号）
+# dev 是**滚动发布**（固定 tag `dev`，资产每次覆盖），只有两种触发方式：
+#   schedule  每 4 小时一次（cron 为 UTC）：main 前进后最迟 4 小时跟上
+#   dispatch  手动触发（Actions 页面 Run workflow，或 `gh workflow run dev-release.yml`），
+#             force=true 可忽略 commit 校验强制重发（例如资产损坏、想立刻要一个构建）
 #
-# 三种触发都先做 **commit 校验**：dev-build.txt 里记着上次发布的 commit，与当前一致就跳过
+# **刻意不挂 push**：每次 push 都跑六平台构建 + 覆盖上传 ~50MB 资产，属于把 CI 和 Release
+# 当流水账；也正好让下面的 commit 校验失效（push 时 commit 必然是新的）。要「push 完立刻有
+# dev」就直接手动触发一次。
+#
+# 两种触发都先做 **commit 校验**：dev-build.txt 里记着上次发布的 commit，与当前一致就跳过
 # 构建与上传（定时触发十有八九命中这条），避免无意义地滚动构建号、刷 Release 时间。
 # 之所以能这么省：dev 的语义是「main 的最新状态」，commit 没变就没有新东西可发。
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: "0 */4 * * *" # 每 4 小时（UTC）
   workflow_dispatch:

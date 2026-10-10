@@ -78,8 +78,8 @@ dtool version --deps       # 附带编译进二进制的依赖模块及版本
 
 元数据在打包时由 `scripts/ldflags.sh` 注入（`make build`、`make build-all`、`make release-build` 和 Release 流水线共用同一份），本机 `go build` 则回退到 Go 嵌入的 VCS 信息。`channel` 由版本号判定：`X.Y.Z` 为 `stable`，`X.Y.0-preview.N` 为 `preview`，`dev-*` 为 `dev`，其余为 `local`。
 
-**main 分支的测试构建**：每次推送到 `main`（以及每 4 小时定时、手动触发），CI 在测试通过后构建全部平台，
-版本号为 `dev-<Actions run id>`，并**滚动发布**到固定 tag `dev`（同名资产每次覆盖，只保留最新一次）。
+**main 分支的测试构建**：CI 在**每 4 小时**定时构建全部平台（也可在 Actions 页面手动触发），版本号为
+`dev-<Actions run id>`，并**滚动发布**到固定 tag `dev`（同名资产每次覆盖，只保留最新一次）。
 所以 `dtool upgrade --channel dev` 装的就是它；`stable` / `preview` 两个渠道完全看不到 dev 构建。
 每次构建同时留一份 workflow artifact（`dtool-dev-<run id>`，14 天），`dtool version` 里的 `build_url`
 可直接跳转到对应的运行记录。
@@ -289,8 +289,9 @@ workflow 的 artifact（`gh run download <run id> --name dtool-dev-<run id>`，1
 `dev`/`dev-1-g<sha>`（被误认为 dev 渠道构建），发版说明的基线也会退化成移动的 `dev`。
 `scripts/tests/dev-tag-hygiene.test.sh` 用「dev 比版本 tag 更近」的恶意布局守住这条。
 
-发布时机（`.github/workflows/dev-release.yml`）：push main 时立刻发；此外**每 4 小时**定时兜底，
-也支持在 Actions 页面**手动触发**（`force=true` 可忽略缓存强制重发）。三种触发都会先比对
+发布时机（`.github/workflows/dev-release.yml`）：**每 4 小时**定时一次，或在 Actions 页面**手动触发**
+（`gh workflow run dev-release.yml`，`-f force=true` 可忽略缓存强制重发）。**刻意不挂 push**——
+否则每次提交都要跑一轮六平台构建 + 覆盖上传；想「推完立刻要 dev」就手动触发一次。两种触发都会先比对
 `dev` 发布里 `dev-build.txt` 记录的 commit——**commit 没变就跳过**，不重复构建、不滚动构建号。
 
 升级前会校验 Release 中 `checksums.txt` 的 sha256，并先运行新二进制自检；任何一步失败都不会改动现有文件。Windows 下运行中的 exe 不能覆盖，因此先把旧文件改名为 `.old` 再让新文件就位（失败回滚，`.old` 下次启动自动清理）。GitHub 限流时设置 `GITHUB_TOKEN`；`DTOOL_REPO` / `DTOOL_UPDATE_API` 可指向镜像。

@@ -1001,8 +1001,10 @@ dev 构建之间没有版本序，硬比大小会出现「装完又说有新版�
 前者为了覆盖上传，后者交给 `dev-build.txt`——改名后必须**重算 checksums.txt**
 （升级端按资产名查哈希），这段逻辑落在 `scripts/dev-release-assets.sh` 并有单测。
 
-**触发与去重**（`.github/workflows/dev-release.yml`）：push main、每 4 小时定时、手动触发
-（`force` 可强制）。三者都先跑 `scripts/dev-release-decision.sh`：把 `dev-build.txt` 里的 commit
+**触发与去重**（`.github/workflows/dev-release.yml`）：只有每 4 小时定时与手动触发（`force` 可强制）
+两种——**刻意不挂 push**：每次提交都跑一轮六平台构建 + 覆盖上传，既烧 CI 又让下面的 commit 校验
+必然失效（push 时 commit 总是新的）。想「推完立刻要 dev」就手动触发。两种触发都先跑
+`scripts/dev-release-decision.sh`：把 `dev-build.txt` 里的 commit
 与当前 commit 比对，相同就跳过构建与上传——定时触发十有八九命中这条，省掉无意义的构建与
 构建号滚动，也让「dev 构建号」只在 main 真的前进时才变。**滚动 tag 的卫生问题**（容易踩）：`dev` 是**移动 tag**，每次都落在 main 最新提交上，而
 `git describe` 挑「最近的 tag」——不排除它就会污染两处：本地构建版本变成 `dev` 或

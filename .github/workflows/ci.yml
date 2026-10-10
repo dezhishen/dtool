@@ -3,7 +3,7 @@ name: CI
 # 这里的职责是「校验」：测试 / lint / 交叉编译。
 # 发版类的活儿在各自的工作流里，它们自己跑测试再发布：
 #   release.yml        打 tag 后发正式版/预览版
-#   dev-release.yml    push main / 每 4 小时 / 手动触发，更新滚动 dev 发布（commit 未变则跳过）
+#   dev-release.yml    每 4 小时 / 手动触发，更新滚动 dev 发布（commit 未变则跳过；刻意不挂 push）
 
 on:
   push:
