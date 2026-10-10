@@ -63,7 +63,9 @@ dtool --max-memory 32K query --sql "SELECT COUNT(*) AS 行数 FROM orders"
 
 - 估算公式：JSON 整块 ≈ 文件 × 13、流式 ≈ 文件 × 2；Excel 转换 ≈ 固定 32MB + 文件 × 6。
 - 预算来源：`--max-memory` > cgroup > 系统可用内存，且只按 85% 计算。
-- 确需强行运行时 `--max-memory 0` 关闭检查；`--load-mode` 对 JOIN 中**每个**数据源分别生效。
+- `--load-mode` 只对 JSON 装入（`query`）有效，且对 JOIN 中**每个**数据源分别生效；`convert` 没有这个参数
+  —— Excel 转换本身就是流式的，要降内存只能缩小输入（拆文件、裁列）。
+- 确需强行运行时 `--max-memory 0` 关闭检查。
 - 1 核 2GB 下的实测数字与能力边界见 [docs/PERFORMANCE.md](../PERFORMANCE.md)。
 
 ## ★★ 沙箱：危险 SQL 会被拦

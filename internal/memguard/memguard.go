@@ -93,8 +93,9 @@ func Budget(explicit *uint64) Memory {
 const (
 	// HintLoadMode 用于 query 的 JSON 装入。
 	HintLoadMode = "改用流式解析（--load-mode stream）、拆分或裁剪输入后重试；确需强制运行时加 --max-memory 0 关闭该检查"
-	// HintSplitInput 用于 convert 等没有流式开关的路径。
-	HintSplitInput = "拆分或裁剪输入（减少行数/列数、改用多个小文件）后重试；确需强制运行时加 --max-memory 0 关闭该检查"
+	// HintSplitInput 用于 convert 等本来就走流式、没有开关可切的路径：
+	// 峰值只随文件体积增长，与行数无关，所以建议只能落在「缩小输入」上。
+	HintSplitInput = "拆分或裁剪输入（裁列、去掉多余工作表，或改用多个小文件）后重试；确需强制运行时加 --max-memory 0 关闭该检查"
 )
 
 // CheckSize 按单一倍率估算峰值内存，见 CheckNeed。
