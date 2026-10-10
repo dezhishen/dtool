@@ -75,6 +75,76 @@ func TestLoadModeWarnsWhenInert(t *testing.T) {
 	}
 }
 
+// `actions sync` 是显式出口：入口的隐式回收被刻意跳过（见 openWorkspaceRaw），
+// 否则它会永远报告「无需收敛」。
+func TestActionsSyncCommand(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := xlsx(t, dir)
+	if _, err := run(t, "convert", "--input", data, "--name", "d"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 伪造「被强杀」的现场：文件与索引都停在 running，pid 已不存在
+	actionFiles, _ := filepath.Glob(filepath.Join(dir, ".dtool", "actions", "*.json"))
+	if len(actionFiles) != 1 {
+		t.Fatalf("actions = %v", actionFiles)
+	}
+	raw, err := os.ReadFile(actionFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a map[string]any
+	if err := json.Unmarshal(raw, &a); err != nil {
+		t.Fatal(err)
+	}
+	a["status"], a["pid"] = "running", 2147480000
+	out, _ := json.Marshal(a)
+	if err := os.WriteFile(actionFiles[0], out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	idxPath := filepath.Join(dir, ".dtool", "index.json")
+	raw, err = os.ReadFile(idxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx map[string]any
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range idx["actions"].([]any) {
+		m := e.(map[string]any)
+		m["status"], m["pid"] = "running", 2147480000
+	}
+	out, _ = json.Marshal(idx)
+	if err := os.WriteFile(idxPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := run(t, "actions", "sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["stale"].(float64) != 1 || got["scanned"].(float64) != 1 || len(got["stale_ids"].([]any)) != 1 {
+		t.Fatalf("sync 报告 = %v", got)
+	}
+
+	raw, err = os.ReadFile(actionFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(raw, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after["status"] != "stale" {
+		t.Fatalf("sync 后文件状态 = %v", after["status"])
+	}
+	if errMsg, _ := after["error"].(map[string]any)["message"].(string); !strings.Contains(errMsg, "进程已消失") {
+		t.Fatalf("缺少可读原因：%v", after["error"])
+	}
+}
+
 func xlsx(t *testing.T, dir string) string {
 	t.Helper()
 	f := excelize.NewFile()

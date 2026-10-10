@@ -72,3 +72,31 @@ func TestReconcileIgnoresBrokenFiles(t *testing.T) {
 		t.Fatalf("Reconcile = %d, %v（应跳过损坏文件）", n, err)
 	}
 }
+
+// Sync 除了收敛，还要报告「确实还在跑」的任务，否则调用方无法区分
+// 「已收敛」与「真在运行」。
+func TestSyncReportsState(t *testing.T) {
+	r := newRec(t)
+	dead := mustStart(t, r, "query", StartParams{})
+	dead.Pid = 2147480000
+	if err := r.save(dead); err != nil {
+		t.Fatal(err)
+	}
+	live := mustStart(t, r, "convert", StartParams{})
+
+	rep, err := r.Sync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Scanned != 2 || rep.Stale != 1 || len(rep.StaleIDs) != 1 || rep.StaleIDs[0] != dead.ID {
+		t.Fatalf("report = %+v", rep)
+	}
+	if len(rep.Running) != 1 || rep.Running[0].ID != live.ID {
+		t.Fatalf("running = %+v", rep.Running)
+	}
+	// 再同步一次：没有陈旧条目，不应产生新的收敛
+	rep2, err := r.Sync()
+	if err != nil || rep2.Stale != 0 || len(rep2.Running) != 1 {
+		t.Fatalf("second sync = %+v, %v", rep2, err)
+	}
+}

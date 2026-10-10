@@ -70,7 +70,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y；y 必须是数值列 |
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，下次命令启动时会落盘收敛，见下） |
-| `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex` | `annotate` 把用户口径/备注写进 Action |
+| `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
 | `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身，见文末 |
 
 通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
@@ -130,6 +130,7 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 | 直接描述目标与产物（"按区域汇总 `sales.xlsx` 并出柱状图，再给我 Top 5 客户 Excel"） | 别反问命令细节：`convert` 成数据集 → `datasets show` 确认列名 → `query` → `visualize --input latest:query` / `--format xlsx --output`，最后把产物路径报回去 |
 | "进度怎么样 / 刚才做了什么" | `actions list --limit 5`，用 `summary` 回答 |
 | "为什么失败了" | `actions list --status failed --limit 1` → `actions show <id>`，读 `error`（含 `detail`/`hint`）；字段缺失时 `detail` 会列出可用列 |
+| "任务像卡住了 / 进程被杀了" | `actions sync`：把进程已消失的 `running` 落盘为 `stale`（含原因），仍活着的列在 `running` 里；返回 `{"scanned","stale","stale_ids","running"}` |
 | "用上次的结果画图/导出" | `visualize --input latest:query ...`，不要重跑查询 |
 | "按季度再拆一下" | 新 `query`，带 `--from action:<上次id>`（血缘），数据源用 `dataset:` 或 `--source` |
 | "标记这个口径含税" | `actions annotate <id> --text "口径：含税" --by ai-agent` |

@@ -98,13 +98,24 @@ func printJSON(w interface{ Write([]byte) (int, error) }, v any) error {
 	return enc.Encode(v)
 }
 
-func openWorkspace() (*workspace.Workspace, error) {
+// openWorkspaceRaw 只打开工作区，不做任何回收——`actions sync` 需要它：
+// 回收正是那条命令要做的事，入口先做掉的话它永远无事可做。
+func openWorkspaceRaw() (*workspace.Workspace, error) {
 	ws, err := workspace.Open(g.workspace)
 	if err != nil {
 		return nil, types.Errorf(types.CodeGeneral, "open workspace: %v", err)
 	}
-	// 上次进程被强杀时来不及写结束状态，Action 会停在 running。这里统一回收一轮，
-	// 否则读 `.dtool/actions/<id>.json` 的人（脚本 / AI / git diff）会以为任务还在跑。
+	return ws, nil
+}
+
+// openWorkspace 打开工作区并回收被强杀中断的 Action（进程已死的 running -> stale）。
+// 放在这里是为了让每条命令都顺手收敛一次，避免读 `.dtool/actions/<id>.json` 的人
+// 以为任务还在跑；想显式看收敛结果用 `dtool actions sync`。
+func openWorkspace() (*workspace.Workspace, error) {
+	ws, err := openWorkspaceRaw()
+	if err != nil {
+		return nil, err
+	}
 	if n, err := (&action.Recorder{WS: ws}).Reconcile(); err != nil {
 		fmt.Fprintf(os.Stderr, "警告：回收被中断的 Action 失败：%v\n", err)
 	} else if n > 0 {

@@ -22,6 +22,28 @@ func newRecorder() (*action.Recorder, *workspace.Workspace, error) {
 func newActionsCmd() *cobra.Command {
 	c := &cobra.Command{Use: "actions", Short: "查询、追踪、补充 Action"}
 
+	sync := &cobra.Command{
+		Use:   "sync",
+		Short: "收敛 Action 状态：把被强杀留下的 running 落盘为 stale，并报告仍在运行的任务",
+		Long: "收敛 Action 状态。\n\n" +
+			"进程被 OOM / kill -9 / 断电打断时来不及写结束状态，Action 会停在 running；\n" +
+			"sync 扫描一轮，把「进程已不存在」的那些在 Action 文件与 index.json 上一起落盘为\n" +
+			"stale（附原因，不臆造结束时间），并列出进程仍活着、确实在跑的任务。\n" +
+			"幂等：没有陈旧条目时不写任何文件。",
+		RunE: func(c *cobra.Command, _ []string) error {
+			// 故意用 raw 打开：入口的隐式回收会把要收敛的条目先收掉，报告就成了空的
+			ws, err := openWorkspaceRaw()
+			if err != nil {
+				return err
+			}
+			rep, err := (&action.Recorder{WS: ws}).Sync()
+			if err != nil {
+				return err
+			}
+			return printJSON(c.OutOrStdout(), rep)
+		},
+	}
+
 	var f action.Filter
 	list := &cobra.Command{
 		Use: "list", Short: "列出 Action（最新在前）",
@@ -166,6 +188,6 @@ func newActionsCmd() *cobra.Command {
 		},
 	}
 
-	c.AddCommand(list, show, output, trace, annotate, export, reindex)
+	c.AddCommand(list, show, output, trace, annotate, export, reindex, sync)
 	return c
 }

@@ -475,6 +475,9 @@ dtool actions annotate 01HX7Z8K2M9PQR3STUVWXYZABC \
 # 从 actions/ 重建 index.json
 dtool actions reindex
 
+# 显式收敛状态：进程已消失的 running -> stale（落盘并附原因），仍活着的列在 running 里
+dtool actions sync
+
 # 导出所有 Action 为单个 JSON（供 AI 一次性读取；支持 --limit / --since 控制体积）
 dtool actions export --output .dtool/actions_dump.json
 ```
@@ -499,6 +502,16 @@ dtool actions export --output .dtool/actions_dump.json
 **`actions trace` 的输出**：按时间顺序返回从指定 Action 开始的所有下游 Action（含 `derived_from` 派生链），形成完整的演进路径。
 
 **`actions show` 的输出**：完整 Action JSON，包括预览数据、注释、派生关系，AI 读取后即可回答"这一步做了什么、结果如何、后续可以怎么补"。
+
+**`actions sync` 的输出**：
+
+```json
+{"scanned": 2, "stale": 1, "stale_ids": ["01J..."], "running": [{"id": "01K...", "type": "query", "pid": 3453902}]}
+```
+
+每条命令启动时也会自动做一次同样的收敛（`openWorkspace`），`sync` 是它的显式出口：
+既能立刻拿一份「谁死了、谁还在跑」的快照，也便于在脚本里断言。为让 `sync` 真有活干，
+它自己走 `openWorkspaceRaw`（不预先回收）。
 
 ---
 

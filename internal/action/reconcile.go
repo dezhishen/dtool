@@ -7,27 +7,37 @@ import (
 	"github.com/dezhishen/dtool/pkg/types"
 )
 
-// Reconcile 把「进程已死的 running」在磁盘上收敛为 stale。
-//
-// 进程被强杀（OOM、kill -9、机器重启）时来不及写结束状态，Action 文件会永远停在
-// running：读路径（actions list / show）会按 pid 显示成 stale，但直接读
-// `.dtool/actions/<id>.json` 的脚本、AI 或 git diff 看到的仍是 running，会误以为任务
-// 还在跑。这里把结论落盘——Action 文件与 index.json 一起改，只在确有陈旧条目时才写。
-//
-// 返回被收敛的条数。
-func (r *Recorder) Reconcile() (int, error) {
+// SyncReport 描述一次状态收敛的结果。
+type SyncReport struct {
+	// Scanned 是索引里的条目总数。
+	Scanned int `json:"scanned"`
+	// Stale 是本次被收敛为 stale 的条数（进程已消失的 running）。
+	Stale int `json:"stale"`
+	// StaleIDs 是本次收敛的 Action ID。
+	StaleIDs []string `json:"stale_ids,omitempty"`
+	// Running 是进程仍活着、确实还在跑的任务。
+	Running []IndexEntry `json:"running,omitempty"`
+}
+
+// Sync 收敛 Action 状态并报告结果：进程已死的 running -> stale（落盘），
+// 仍活着的 running 原样列出。`dtool actions sync` 就是它的出口。
+func (r *Recorder) Sync() (*SyncReport, error) {
 	// 与 save/annotate 共用工作区锁：回收会改写 Action 文件与 index.json，
 	// 不能与别的进程的写入交错（否则可能出现「后写覆盖前写」丢条目）。
 	unlock, err := r.WS.Lock()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer unlock()
 	idx := r.loadIndex()
-	fixed := 0
+	rep := &SyncReport{Scanned: len(idx.Actions)}
 	for i := range idx.Actions {
 		e := idx.Actions[i]
-		if e.Status != StatusRunning || pidAlive(e.Pid) {
+		if e.Status != StatusRunning {
+			continue
+		}
+		if pidAlive(e.Pid) {
+			rep.Running = append(rep.Running, e)
 			continue
 		}
 		a, err := r.readRaw(e.ID)
@@ -39,15 +49,27 @@ func (r *Recorder) Reconcile() (int, error) {
 		}
 		markStale(a)
 		if err := workspace.WriteJSONAtomic(r.WS.ActionPath(a.ID), a); err != nil {
-			return fixed, err
+			return rep, err
 		}
 		idx.Actions[i] = entryOf(a)
-		fixed++
+		rep.Stale++
+		rep.StaleIDs = append(rep.StaleIDs, a.ID)
 	}
-	if fixed == 0 {
-		return 0, nil
+	if rep.Stale > 0 {
+		if err := workspace.WriteJSONAtomic(r.WS.IndexPath(), idx); err != nil {
+			return rep, err
+		}
 	}
-	return fixed, workspace.WriteJSONAtomic(r.WS.IndexPath(), idx)
+	return rep, nil
+}
+
+// Reconcile 收敛被中断的 Action，返回收敛条数；命令入口用的就是它。
+func (r *Recorder) Reconcile() (int, error) {
+	rep, err := r.Sync()
+	if err != nil {
+		return 0, err
+	}
+	return rep.Stale, nil
 }
 
 // markStale 把被中断的 Action 标成 stale，并写清「进程没了、结果未知」。

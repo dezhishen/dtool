@@ -83,6 +83,7 @@ dtool actions show <id>               # 完整参数、SQL、产物、结果预�
 dtool actions annotate <id> --text "用于 10 月经营会"
 dtool actions trace <id>              # 上游数据 -> 本次查询 -> 派生的图表
 dtool actions export --limit 20 --output 月报留痕.json
+dtool actions sync                     # 任务被强杀过？把陈旧的 running 收敛成 stale，并列出真在跑的
 ```
 
 `trace` 会把「Excel → 数据集 → 查询 → 图表」串成一条链，直接回答「这个数字是怎么算出来的」；
