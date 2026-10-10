@@ -106,4 +106,4 @@ dtool query --sql "SELECT 区域, 产品, 销量 FROM (
 | 同一客户在多个区域被重复计数 | 用 `COUNT(DISTINCT 客户ID)` |
 | `WHERE 产品 = "键盘"` 报 no such column | 字符串值用**单引号**：`WHERE 产品 = '键盘'`；双引号是标识符 |
 
-相关：[连表查询规则](../../skills.md) · [场景总览](README.md)
+相关：[连表查询规则](../../skills/dtool/SKILL.md) · [场景总览](README.md)

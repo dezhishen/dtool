@@ -143,4 +143,4 @@ dtool visualize --input latest:query --type table --format md --output 结果.md
 | 预检拦得太早 | 估算按 ×2 / ×13 保守取值；确认内存够就 `--max-memory 0` |
 | 单引号包了文件路径 | 单引号是**字符串**不是标识符，路径要用双引号 |
 
-相关：[性能与边界](../PERFORMANCE.md) · [场景总览](README.md) · [skills.md](../../skills.md)
+相关：[性能与边界](../PERFORMANCE.md) · [场景总览](README.md) · [SKILL.md](../../skills/dtool/SKILL.md)

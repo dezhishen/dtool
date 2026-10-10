@@ -38,7 +38,7 @@ go build -o "$tmp/dtool" . >/dev/null
 } | grep -ohE -- '--[a-z][a-z0-9-]*' | sort -u >"$tmp/cli.txt"
 
 # 2) 收集文档里出现的开关（README / skills / Design / docs / examples）
-grep -rohE -- '--[a-z][a-z0-9-]*' README.md skills.md Design.md docs examples 2>/dev/null |
+grep -rohE -- '--[a-z][a-z0-9-]*' README.md Design.md docs examples skills 2>/dev/null |
   sort -u >"$tmp/doc.txt"
 
 [[ -s "$tmp/cli.txt" ]] || { echo "FAIL: 没能从 --help 里解析出任何开关" >&2; exit 1; }

@@ -67,7 +67,7 @@ AI  ｜ convert sales.xlsx → query（SQL 见下）→ visualize，口径「不
 ```
 
 Agent 侧的行为约定（先 `datasets show` 再写 SQL、默认只读 preview、失败先自查 Action）见
-[skills.md](../../skills.md)。
+[SKILL.md](../../skills/dtool/SKILL.md)。
 
 ## 四条通用规则
 
@@ -80,5 +80,5 @@ Agent 侧的行为约定（先 `datasets show` 再写 SQL、默认只读 preview
 
 难度标记：★ 一条命令 ｜ ★★ 需要连表或换输出格式 ｜ ★★★ 多步组合 + 导出 + 留痕。
 
-更细的 SQL 规则与参数速查见 [skills.md](../../skills.md)；内存与性能实测见
+更细的 SQL 规则与参数速查见 [SKILL.md](../../skills/dtool/SKILL.md)；内存与性能实测见
 [docs/PERFORMANCE.md](../PERFORMANCE.md)。

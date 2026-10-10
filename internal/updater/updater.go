@@ -31,9 +31,13 @@ const (
 	maxArchive    = 200 << 20
 	maxBinary     = 400 << 20
 	checksumsName = "checksums.txt"
-	// skillsName：随发布归档一起分发的 agent 手册（build-release.sh 把它打进每个平台归档）。
+	// skillsName：随发布归档一起分发的 agent 手册。它是仓库里那个标准 Agent Skill 包
+	// （skills/dtool/SKILL.md）的副本，build-release.sh 把它放进每个平台归档；
 	// `upgrade --skills` 直接从**已校验过**的归档里取它，不额外走网络。
-	skillsName = "skills.md"
+	skillsName = "SKILL.md"
+	// legacySkillsName：v0.2.0 及以前的归档里这份手册叫 skills.md（当时还没有按
+	// Agent Skill 布局组织）。老版本还能装，所以取手册时按新名找、找不到再退回旧名。
+	legacySkillsName = "skills.md"
 	// defaultDevTag：滚动 dev 发布的 tag（`dtool upgrade --channel dev` 的目标）。
 	defaultDevTag = "dev"
 	// devBuildAsset：dev 发布里记录构建号的小文件（见 CI 的 dev-build 任务）。
@@ -129,8 +133,8 @@ type UpgradeOptions struct {
 	Version string  // 指定版本；空则取最新。dev 渠道可写 dev / dev-<run id>
 	Pre     bool    // 兼容旧参数：等价于 Channel=preview
 	Channel Channel // stable / preview / dev；空按 Pre 推断，再默认 stable
-	// SkillsPath：把目标版本的 skills.md 另存到哪里（空 = 不保存）。取值可以是目录
-	// （写成 <目录>/skills.md，目录不存在则创建）、明确以 .md 结尾的文件路径，
+	// SkillsPath：把目标版本的 SKILL.md 另存到哪里（空 = 不保存）。取值可以是目录
+	// （写成 <目录>/SKILL.md，目录不存在则创建）、明确以 .md 结尾的文件路径，
 	// 或 "."（当前目录）。见 skillsTarget。
 	SkillsPath string
 }
@@ -142,7 +146,7 @@ type UpgradeResult struct {
 	To         string `json:"to"`
 	Path       string `json:"path,omitempty"`
 	ReleaseURL string `json:"release_url,omitempty"`
-	// SkillsPath：skills.md 实际写入的位置（绝对路径）；未请求时为 "-" 省略。
+	// SkillsPath：SKILL.md 实际写入的位置（绝对路径）；未请求时为 "-" 省略。
 	SkillsPath    string `json:"skills_path,omitempty"`
 	SkillsChanged bool   `json:"skills_changed,omitempty"`
 	Message       string `json:"message"`
@@ -479,7 +483,7 @@ func extractFile(archive []byte, name, want string) ([]byte, error) {
 }
 
 // skillsTarget 把 --skills 的取值解析成「要写到哪个文件」。
-// 目录（已存在的目录 / 以分隔符结尾 / 没有 .md 后缀）会补上 skills.md；"." 就是当前目录。
+// 目录（已存在的目录 / 以分隔符结尾 / 没有 .md 后缀）会补上 SKILL.md；"." 就是当前目录。
 func skillsTarget(raw string) (string, error) {
 	p := strings.TrimSpace(raw)
 	if p == "" {
@@ -491,7 +495,7 @@ func skillsTarget(raw string) (string, error) {
 	case strings.HasSuffix(p, "/") || strings.HasSuffix(p, string(os.PathSeparator)):
 		isDir = true
 	case !strings.EqualFold(filepath.Ext(p), ".md"):
-		// 没有 .md 后缀就当目录：--skills=docs → docs/skills.md
+		// 没有 .md 后缀就当目录：--skills=docs → docs/SKILL.md
 		isDir = true
 	default:
 		if st, err := os.Stat(p); err == nil && st.IsDir() {
@@ -508,16 +512,20 @@ func skillsTarget(raw string) (string, error) {
 	return filepath.Join(p, skillsName), nil
 }
 
-// writeSkills 从归档里取出 skills.md 写到 raw 指定的位置，返回绝对路径与内容是否变化。
+// writeSkills 从归档里取出 SKILL.md 写到 raw 指定的位置，返回绝对路径与内容是否变化。
 func (u *Updater) writeSkills(archive []byte, archiveName, raw string) (string, bool, error) {
 	dest, err := skillsTarget(raw)
 	if err != nil {
 		return "", false, err
 	}
+	// 新名优先；v0.2.0 及以前的归档里叫 skills.md（见 legacySkillsName）。
 	data, err := extractFile(archive, archiveName, skillsName)
 	if err != nil {
-		return "", false, types.Errorf(types.CodeExec, "%s 里没有 %s", archiveName, skillsName).
-			WithHint("这份发布的归档不含 agent 手册；从 Releases 页面手动下载即可")
+		if data, err = extractFile(archive, archiveName, legacySkillsName); err != nil {
+			return "", false, types.Errorf(types.CodeExec, "%s 里既没有 %s 也没有 %s",
+				archiveName, skillsName, legacySkillsName).
+				WithHint("这份发布的归档不含 agent 手册；从 Releases 页面手动下载即可")
+		}
 	}
 	old, readErr := os.ReadFile(dest)
 	changed := readErr != nil || !bytes.Equal(old, data)
@@ -546,13 +554,13 @@ func skillsNote(res *UpgradeResult) string {
 	if res.SkillsPath == "" {
 		return ""
 	}
-	return fmt.Sprintf("；skills.md %s：%s", skillsState(res.SkillsChanged), res.SkillsPath)
+	return fmt.Sprintf("；SKILL.md %s：%s", skillsState(res.SkillsChanged), res.SkillsPath)
 }
 
 // attachSkills 记录手册落点并打日志（message 由调用方在最后拼，见 skillsNote）。
 func (u *Updater) attachSkills(res *UpgradeResult, path string, changed bool) {
 	res.SkillsPath, res.SkillsChanged = path, changed
-	u.logf("skills.md → %s（%s）", path, skillsState(changed))
+	u.logf("SKILL.md → %s（%s）", path, skillsState(changed))
 }
 
 // fetchVerified 下载发布里当前平台的归档并校验 sha256：拿不到 checksums.txt、
@@ -588,7 +596,7 @@ func (u *Updater) fetchVerified(ctx context.Context, rel *ghRelease, assetV stri
 	return name, archive, nil
 }
 
-// skillsOnly 用于「不需要升级」但用户仍要 skills.md 的场景：只下载校验归档取出手册，
+// skillsOnly 用于「不需要升级」但用户仍要 SKILL.md 的场景：只下载校验归档取出手册，
 // 完全不碰二进制（不下载校验的话就没法保证手册与二进制同源）。
 func (u *Updater) skillsOnly(ctx context.Context, rel *ghRelease, t target, res *UpgradeResult, o UpgradeOptions) (*UpgradeResult, error) {
 	if o.SkillsPath == "" {
@@ -692,7 +700,7 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 	if err != nil {
 		return nil, types.Errorf(types.CodeExec, "extract %s: %v", name, err)
 	}
-	// skills.md 在替换二进制**之前**写：路径不可写时直接失败，不留下
+	// SKILL.md 在替换二进制**之前**写：路径不可写时直接失败，不留下
 	// 「二进制换了、文档没写」的半成品状态。
 	if o.SkillsPath != "" {
 		path, changed, err := u.writeSkills(archive, name, o.SkillsPath)

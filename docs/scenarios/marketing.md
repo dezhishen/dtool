@@ -116,4 +116,4 @@ dtool visualize --input latest:query --type pie --x 城市 --y 客户数 \
 | 第二张图取到第一张的数据 | 每张图前面紧跟它自己的 `query`，或改用 `--input action:<id>` |
 | 环比出现 `null` | 首月无上月，用 `COALESCE(环比, 0)` 或直接忽略 |
 
-相关：[场景总览](README.md) · [SQL 规则](../../skills.md)
+相关：[场景总览](README.md) · [SQL 规则](../../skills/dtool/SKILL.md)

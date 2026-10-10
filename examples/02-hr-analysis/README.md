@@ -65,5 +65,5 @@ bash examples/02-hr-analysis/run.sh   # 也可 DTOOL=/path/to/dtool bash …
 ## 接着看
 
 - 同一场景的职业化写法：[docs/scenarios/hr.md](../../docs/scenarios/hr.md)
-- SQL 规则与参数速查：[skills.md](../../skills.md)
+- SQL 规则与参数速查：[skills/dtool/SKILL.md](../../skills/dtool/SKILL.md)
 - 其余示例：[examples/README.md](../README.md)

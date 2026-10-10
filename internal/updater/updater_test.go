@@ -46,7 +46,7 @@ func tarGzFiles(t *testing.T, files ...namedFile) []byte {
 	return buf.Bytes()
 }
 
-// tarGz 与 build-release.sh 的归档布局一致：条目带 ./ 前缀，且含 README/skills.md 等非二进制文件。
+// tarGz 与 build-release.sh 的归档布局一致：条目带 ./ 前缀，且含 README/SKILL.md 等非二进制文件。
 func tarGz(t *testing.T, binName string, content []byte) []byte {
 	t.Helper()
 	return tarGzFiles(t,
@@ -56,7 +56,7 @@ func tarGz(t *testing.T, binName string, content []byte) []byte {
 	)
 }
 
-// tarGzBinaryOnly 模拟不含 skills.md 的归档（裁剪过的旧发布）。
+// tarGzBinaryOnly 模拟不含手册的归档（裁剪过的旧发布）。
 func tarGzBinaryOnly(t *testing.T, binName string, content []byte) []byte {
 	t.Helper()
 	return tarGzFiles(t, namedFile{"./" + binName, content})
@@ -66,7 +66,7 @@ func zipOf(t *testing.T, binName string, content []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	// Windows 归档同样带 skills.md（build-release.sh 用的是同一份文件列表）
+	// Windows 归档同样带 SKILL.md（build-release.sh 用的是同一份文件列表）
 	for _, f := range []namedFile{{skillsName, []byte(skillsDoc)}, {binName, content}} {
 		w, _ := zw.Create(f.name)
 		w.Write(f.data)
@@ -782,7 +782,7 @@ func TestUpgradeExplicitDevBuildID(t *testing.T) {
 	}
 }
 
-// --skills：把该版本的 skills.md 一并取出来（从**已校验**的归档里取，不额外走网络）。
+// --skills：把该版本的 SKILL.md 一并取出来（从**已校验**的归档里取，不额外走网络）。
 func TestUpgradeWritesSkills(t *testing.T) {
 	u := fakeGitHub(t, []rel{release(t, "v1.1.0", "linux", "NEW")})
 	u.Current, u.Exe = "1.0.0", installedExe(t, "OLD")
@@ -803,10 +803,10 @@ func TestUpgradeWritesSkills(t *testing.T) {
 	if !res.Upgraded || !res.SkillsChanged || !filepath.IsAbs(res.SkillsPath) {
 		t.Fatalf("res = %+v", res)
 	}
-	if read(t, filepath.Join(dir, "skills.md")) != skillsDoc {
+	if read(t, filepath.Join(dir, skillsName)) != skillsDoc {
 		t.Fatalf("没写到当前目录：%s = %q", res.SkillsPath, read(t, res.SkillsPath))
 	}
-	if !strings.Contains(res.Message, "skills.md 已更新") {
+	if !strings.Contains(res.Message, "SKILL.md 已更新") {
 		t.Fatalf("message = %q", res.Message)
 	}
 
@@ -825,25 +825,25 @@ func TestUpgradeWritesSkills(t *testing.T) {
 	}
 
 	// 本地手册被改过（或版本较旧）→ 应当重新写回并标 changed
-	if err := os.WriteFile(filepath.Join(dir, "skills.md"), []byte("stale"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, skillsName), []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	res, err = u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: dir})
 	if err != nil || !res.SkillsChanged {
 		t.Fatalf("res = %+v %v", res, err)
 	}
-	if read(t, filepath.Join(dir, "skills.md")) != skillsDoc {
-		t.Fatal("没有覆盖旧的 skills.md")
+	if read(t, filepath.Join(dir, skillsName)) != skillsDoc {
+		t.Fatal("没有覆盖旧的手册")
 	}
 }
 
-// --skills 的取值规则：目录（已存在 / 带斜杠 / 无 .md 后缀）补 skills.md，明确的 .md 当文件。
+// --skills 的取值规则：目录（已存在 / 带斜杠 / 无 .md 后缀）补 SKILL.md，明确的 .md 当文件。
 func TestSkillsTargetRules(t *testing.T) {
 	dir := t.TempDir()
 	for _, c := range []struct{ in, want string }{
-		{dir, filepath.Join(dir, "skills.md")},
-		{dir + "/", filepath.Join(dir, "skills.md")},
-		{filepath.Join(dir, "docs"), filepath.Join(dir, "docs", "skills.md")},
+		{dir, filepath.Join(dir, skillsName)},
+		{dir + "/", filepath.Join(dir, skillsName)},
+		{filepath.Join(dir, "docs"), filepath.Join(dir, "docs", skillsName)},
 		{filepath.Join(dir, "docs", "agent.md"), filepath.Join(dir, "docs", "agent.md")},
 	} {
 		got, err := skillsTarget(c.in)
@@ -859,7 +859,7 @@ func TestSkillsTargetRules(t *testing.T) {
 	}
 }
 
-// 归档里没有 skills.md（裁剪过的旧发布）：报可读错误，且**不动二进制**（先写手册、后换二进制）。
+// 归档里没有手册（裁剪过的旧发布）：报可读错误，且**不动二进制**（先写手册、后换二进制）。
 func TestUpgradeSkillsMissingInArchive(t *testing.T) {
 	u := fakeGitHub(t, []rel{release(t, "v1.1.0", "linux", "NEW", func(r *rel) {
 		for n := range r.assets {
@@ -874,7 +874,7 @@ func TestUpgradeSkillsMissingInArchive(t *testing.T) {
 	u.Verify = func(string, string) error { t.Fatal("must not install"); return nil }
 
 	if _, err := u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: t.TempDir()}); err == nil {
-		t.Fatal("归档缺 skills.md 时应报错")
+		t.Fatal("归档缺手册时应报错")
 	}
 	if read(t, u.Exe) != "OLD" {
 		t.Fatal("binary modified")
@@ -884,7 +884,7 @@ func TestUpgradeSkillsMissingInArchive(t *testing.T) {
 	}
 }
 
-// Windows 走 zip，skills.md 同样要能取出来。
+// Windows 走 zip，SKILL.md 同样要能取出来。
 func TestUpgradeSkillsFromZip(t *testing.T) {
 	u := fakeGitHub(t, []rel{release(t, "v1.1.0", "windows", "NEW-EXE")})
 	u.OS = "windows"
@@ -897,7 +897,38 @@ func TestUpgradeSkillsFromZip(t *testing.T) {
 	if _, err := u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: filepath.Join(dir, "docs")}); err != nil {
 		t.Fatal(err)
 	}
-	if read(t, filepath.Join(dir, "docs", "skills.md")) != skillsDoc {
-		t.Fatal("zip 归档里的 skills.md 没被取出")
+	if read(t, filepath.Join(dir, "docs", skillsName)) != skillsDoc {
+		t.Fatal("zip 归档里的 SKILL.md 没被取出")
+	}
+}
+
+// 老发布的归档里手册叫 skills.md（v0.2.0 及以前，还没有按 Agent Skill 布局组织）：
+// 仍然要能取到，而且落点统一成新名字 SKILL.md——否则用户升级到新版后手上会同时留着
+// 一份 skills.md（陈旧）和一份 SKILL.md（新），谁也说不清该看哪份。
+func TestUpgradeSkillsLegacyNameInArchive(t *testing.T) {
+	u := fakeGitHub(t, []rel{release(t, "v1.1.0", "linux", "NEW", func(r *rel) {
+		for n := range r.assets {
+			if strings.HasPrefix(n, "dtool_") {
+				r.assets[n] = tarGzFiles(t,
+					namedFile{"./dtool", []byte("NEW")},
+					namedFile{"./" + legacySkillsName, []byte(skillsDoc)},
+				)
+				sum := sha256.Sum256(r.assets[n])
+				r.assets["checksums.txt"] = []byte(hex.EncodeToString(sum[:]) + "  ./" + n + "\n")
+			}
+		}
+	})})
+	u.Current, u.Exe = "1.0.0", installedExe(t, "OLD")
+	u.Verify = nil
+
+	res, err := u.Upgrade(context.Background(), UpgradeOptions{SkillsPath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read(t, res.SkillsPath) != skillsDoc {
+		t.Fatalf("旧归档里的 skills.md 没被取到：%s", res.SkillsPath)
+	}
+	if filepath.Base(res.SkillsPath) != skillsName {
+		t.Fatalf("落点应统一成 %s，实际 %s", skillsName, res.SkillsPath)
 	}
 }

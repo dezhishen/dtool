@@ -98,4 +98,4 @@ dtool actions sync                     # 任务被强杀过？把陈旧的 runni
 | 图表中文变方框 | `--font /path/to/字体.ttf`，或在配置文件里设 `font:` |
 | 每次都要重跑转换 | 先用不带 `--sql` 的 pipeline 转一次，之后用 `--input dataset:<名>` |
 
-相关：[场景总览](README.md) · [skills.md](../../skills.md)
+相关：[场景总览](README.md) · [SKILL.md](../../skills/dtool/SKILL.md)

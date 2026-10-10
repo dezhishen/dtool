@@ -109,4 +109,4 @@ dtool query --sql "SELECT 部门, 姓名, 月薪 FROM (
 | 列名含特殊字符或重名 | 用双引号：`"名称_2"`、`"邮箱"` |
 | 平均薪金有小数 | `ROUND(AVG(月薪),0)`，或直接取整数部分 |
 
-相关：[SQL 规则](../../skills.md) · [场景总览](README.md)
+相关：[SQL 规则](../../skills/dtool/SKILL.md) · [场景总览](README.md)

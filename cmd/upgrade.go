@@ -63,10 +63,10 @@ func newUpgradeCmd(version string) *cobra.Command {
 ` + "`--version`" + ` 可指定任意历史版本（可降级）；dev 构建写 ` + "`--version dev`" + ` 或
 ` + "`--version dev-<run id>`" + `，但 dev 渠道只保留最新一次构建。
 
-` + "`--skills[=路径]`" + ` 顺带把**这个版本**的 skills.md（agent 手册）另存一份：
+` + "`--skills[=路径]`" + ` 顺带把**这个版本**的 SKILL.md（Agent 技能手册）另存一份：
 
-  --skills              写到当前目录（./skills.md）
-  --skills=docs/        写到 docs/skills.md（目录不存在则创建）
+  --skills              写到当前目录（./SKILL.md）
+  --skills=docs/        写到 docs/SKILL.md（目录不存在则创建）
   --skills=agent.md     写到指定文件
 
 不带 ` + "`--skills`" + ` 就完全不动文件。已经是最新版本时也能单独取手册（只下载校验归档，
@@ -106,7 +106,7 @@ func newUpgradeCmd(version string) *cobra.Command {
 	c.Flags().StringVar(&channel, "channel", "", "升级渠道：stable（默认）/ preview / dev")
 	c.Flags().BoolVar(&pre, "pre", false, "等价于 --channel preview")
 	c.Flags().StringVar(&skills, "skills", "",
-		"顺带另存该版本的 skills.md：--skills=目录（写 目录/skills.md）/ --skills=文件.md；裸 --skills 写到当前目录")
+		"顺带另存该版本的 SKILL.md：--skills=目录（写 目录/SKILL.md）/ --skills=文件.md；裸 --skills 写到当前目录")
 	c.Flags().Lookup("skills").NoOptDefVal = "."
 	return c
 }

@@ -126,4 +126,4 @@ dtool actions list --limit 3
 | `result exceeds --max-rows` | 结果超过 10000 行，加 `LIMIT` 或调大 `--max-rows` |
 | 中文显示成方框 | 指定中文字体：`--font /path/to/字体.ttf`，或在配置文件里设 `font:` |
 
-相关：[连表查询规则](../../skills.md) · [场景总览](README.md)
+相关：[连表查询规则](../../skills/dtool/SKILL.md) · [场景总览](README.md)

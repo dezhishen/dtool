@@ -113,4 +113,4 @@ dtool query --format xlsx --output 对账表.xlsx --sql "SELECT strftime('%Y-%m'
 | 想筛空值却筛不出来 | 用 `WHERE 列 IS NULL`，`= NULL` 永远不成立 |
 | 结果被 `--max-rows` 拦下 | 默认上限 10000 行且**报错**而非截断，先聚合或加 `LIMIT` |
 
-相关：[SQL 规则](../../skills.md) · [场景总览](README.md)
+相关：[SQL 规则](../../skills/dtool/SKILL.md) · [场景总览](README.md)

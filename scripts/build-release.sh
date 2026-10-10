@@ -18,7 +18,10 @@ for t in "${targets[@]}"; do
   stage="$(mktemp -d)"
   CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
     go build -trimpath -ldflags="${ldflags}" -o "${stage}/${bin}" .
-  cp README.md skills.md LICENSE THIRD_PARTY_NOTICES.md "${stage}/"
+  # 手册的源是标准 Agent Skill 包（skills/<name>/SKILL.md），归档里也按这个名字
+  # 放：这样解包后既能直接读，也能整份丢进平台的技能目录（<平台目录>/dtool/SKILL.md）。
+  cp README.md LICENSE THIRD_PARTY_NOTICES.md "${stage}/"
+  cp skills/dtool/SKILL.md "${stage}/SKILL.md"
   if [[ "$os" == windows ]]; then
     (cd "$stage" && zip -q "$OLDPWD/dist/${name}.zip" ./*)
   else

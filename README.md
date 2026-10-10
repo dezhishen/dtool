@@ -39,7 +39,9 @@ SQL 表名：用 `--source 别名=引用`，或用**双引号**包裹文件路�
 | Linux / macOS | `dtool_<版本>_<os>_<arch>.tar.gz` |
 | Windows | `dtool_<版本>_windows_<arch>.zip`（内含 `dtool.exe`） |
 
-包内除可执行文件外还有 `README.md`、`skills.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`。
+包内除可执行文件外还有 `README.md`、`SKILL.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`；其中 `SKILL.md`
+就是仓库里那份 Agent Skill 包 [skills/dtool/SKILL.md](skills/dtool/SKILL.md)（解包后可直接丢进平台的技能目录）。
+v0.2.0 及以前的归档里它叫 `skills.md`，`dtool upgrade --skills` 两种名字都能取。
 
 ```bash
 # Linux / macOS（以 linux-amd64 为例，macOS 换成 darwin_amd64 或 darwin_arm64）
@@ -149,7 +151,7 @@ JSON → 内存 SQLite 的装入方式由 `--load-mode`（`auto`（默认）/ `s
 456MB / 500 万行 → 1:31、603MB；1.34GB / 1400 万行 → 3:42、1637MB（需 `--max-memory 0`，
 默认预检会在约 850MB 以上提前拦下）。
 
-流式模式下内存不再随文件线性暴涨，限制主要变成**耗时**。`--timeout` 只约束**查询阶段**（默认 60s）；载入是本地的读写与 CPU 工作，不受它限制，由内存看门狗和 Ctrl+C 兜底——按下 Ctrl+C（或收到 SIGTERM）会立刻停在该步，以 `code: 5`「已中断」退出并留下 `failed` 的 Action（`4` 才是「跑完但出错」，见 [skills.md](skills.md)）。
+流式模式下内存不再随文件线性暴涨，限制主要变成**耗时**。`--timeout` 只约束**查询阶段**（默认 60s）；载入是本地的读写与 CPU 工作，不受它限制，由内存看门狗和 Ctrl+C 兜底——按下 Ctrl+C（或收到 SIGTERM）会立刻停在该步，以 `code: 5`「已中断」退出并留下 `failed` 的 Action（`4` 才是「跑完但出错」，见 [skills/dtool/SKILL.md](skills/dtool/SKILL.md)）。
 
 ```bash
 dtool query --load-mode stream --source d=big.json --sql 'SELECT ...'
@@ -268,12 +270,12 @@ dtool --update [--channel stable|preview|dev]   # 只检查，不改动任何文
 dtool upgrade [--channel dev]                   # 升级到该渠道的最新版
 dtool upgrade --version 1.2.0                   # 指定版本（可降级）；预览版如 1.2.0-preview.1
 dtool upgrade --version dev                     # dev 构建也可显式指定（滚动发布只保留最新一次）
-dtool upgrade --skills                          # 顺带取该版本的 skills.md；裸写法写到当前目录
+dtool upgrade --skills                          # 顺带取该版本的 SKILL.md；裸写法写到当前目录
 dtool upgrade --skills=docs/                    # 或写进指定目录（不存在会创建）/ --skills=agent.md 指定文件
 ```
 
-`--skills[=路径]`：把**你装的那个版本**的 `skills.md`（面向 AI Agent 的使用指南）另存一份——取值是目录就写
-`<目录>/skills.md`（目录不存在会创建），是 `.md` 文件就写该文件，裸 `--skills` 写当前目录。手册取自发布归档，
+`--skills[=路径]`：把**你装的那个版本**的 `SKILL.md`（面向 AI Agent 的使用手册）另存一份——取值是目录就写
+`<目录>/SKILL.md`（目录不存在会创建），是 `.md` 文件就写该文件，裸 `--skills` 写当前目录。手册取自发布归档，
 和二进制是同一份资产、同一次 sha256 校验，不会出现「二进制是旧版、手册是新版」；已经是最新版本时也能单独取
 （完全不碰二进制），JSON 里的 `skills_changed` 说明内容有没有变化。
 
@@ -304,7 +306,26 @@ https://github.com/dezhishen/dtool/releases   # 自行下载对应平台的压�
 
 即：`upgrade` 不会因为一次网络抖动就放弃，失败信息里也直接带上 Release 页面地址，不必再靠工具自己去猜。
 
-面向 AI Agent 的使用指南见 [skills.md](skills.md)。
+## 给 AI Agent / 技能平台
+
+agent 手册的源文件是 **[skills/dtool/SKILL.md](skills/dtool/SKILL.md)**——按主流平台约定的
+Agent Skill 布局组织（一个技能一个目录，`SKILL.md` 带 `name`/`description` frontmatter，
+目录名与 `name` 一致）：
+
+```
+skills/dtool/SKILL.md      # name: dtool；description 说明"什么时候该用它"
+```
+
+装法三选一：
+
+```bash
+cp -r skills/dtool ~/.claude/skills/                 # 或平台的技能目录
+cp -r skills/dtool .github/skills/                   # 项目内（VS Code / Copilot 也会读）
+dtool upgrade --skills=~/.claude/skills/dtool/SKILL.md   # 从发布归档里取，版本与二进制同源
+```
+
+最后一条是给"已经装了 dtool"的场景：手册和二进制来自同一份发布、同一次 sha256 校验，
+不会出现「二进制是 0.2.0、手册是 main」。裸 `--skills` 等价于写到当前目录的 `./SKILL.md`。
 
 ## 中文图表与配置文件
 
