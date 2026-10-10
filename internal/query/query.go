@@ -127,9 +127,18 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 		}
 		return nil
 	}()
+	// 装载段与聚合段分开报：`GROUP BY` / `ORDER BY` 要排序，峰值可能是装载后才涨上去的
+	// （用户 Windows 实测里 118MB 输入「加载 84MB 可控、聚合段冲到 139MB」）。只有把两段
+	// 拆开，才能判断该降档还是该改查询。
+	loadPeak, loaded := memguard.PeakUsage(), loadErr == nil
+	if loaded {
+		memguard.Debugf("装载段完成：峰值 %s（预计 %s），耗时 %s",
+			memguard.HumanSize(loadPeak), memguard.HumanSize(plan.Predicted),
+			time.Since(start).Round(time.Millisecond))
+	}
 	// 记录这次实测：预计多少、实际峰值多少、跑没跑完。失败那条最有价值——它告诉
 	// 下一次别再选这一档（fatal 崩溃时进程什么都不剩，只有工作区里的记录还在）。
-	recordSample(hist, o.PlanFile, spec, total, plan.Predicted, start, spec.Store, mem, loadErr == nil)
+	recordSample(hist, o.PlanFile, spec, total, plan.Predicted, start, loadPeak, spec.Store, mem, loadErr == nil)
 	if loadErr != nil {
 		return nil, loadErr
 	}
@@ -145,6 +154,15 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 	res, err := collect(qctx, db, sqlText, o.MaxRows)
 	if err != nil {
 		return nil, wrapErr(qctx, o, err, phaseQuery)
+	}
+	// 聚合段可能把峰值再推高：更新那条记录，让它反映「这条命令的完整代价」
+	// （记录已在装载后落盘一次，即使查询段崩了，装载段的数据也在）。
+	final := memguard.PeakUsage()
+	memguard.Debugf("查询段完成：峰值 %s（聚合段增量 %s）", memguard.HumanSize(final),
+		memguard.HumanSize(final-min64(final, loadPeak)))
+	hist.UpdateLastPeak(final)
+	if err := hist.Save(); err != nil {
+		memguard.Debugf("选档历史更新失败：%v", err)
 	}
 	res.Strategy = spec.Name
 	res.StrategyNote = plan.Reason
@@ -224,13 +242,13 @@ func rejectedSummary(plan memguard.Plan) string {
 
 // recordSample 把本次执行写进选档历史（失败也要写）。
 func recordSample(hist *memguard.History, path string, spec strategy, size, predicted uint64,
-	start time.Time, store Store, mem memguard.Memory, ok bool) {
+	start time.Time, loadPeak uint64, store Store, mem memguard.Memory, ok bool) {
 	if hist == nil || path == "" {
 		return
 	}
 	peak := memguard.PeakUsage()
 	hist.Add(memguard.Sample{
-		Rung: spec.Name, Size: size, Predicted: predicted, Peak: peak, OK: ok,
+		Rung: spec.Name, Size: size, Predicted: predicted, Peak: peak, LoadPeak: loadPeak, OK: ok,
 		MS: time.Since(start).Milliseconds(), Source: mem.Source,
 	})
 	if err := hist.Save(); err != nil {
@@ -239,6 +257,13 @@ func recordSample(hist *memguard.History, path string, spec strategy, size, pred
 	memguard.Debugf("本次执行档=%s 实测峰值=%s（预计 %s，比值 %.2f，%s，耗时 %dms）",
 		spec.Name, memguard.HumanSize(peak), memguard.HumanSize(predicted),
 		float64(peak)/float64(max64(predicted, 1)), onOff(ok), time.Since(start).Milliseconds())
+}
+
+func min64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func max64(a, b uint64) uint64 {

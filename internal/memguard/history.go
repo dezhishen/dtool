@@ -23,13 +23,14 @@ const maxSamples = 200
 
 // Sample 是一次装载的实测记录。
 type Sample struct {
-	Rung      string    `json:"rung"`             // 执行档名，如 "stream+disk"
-	Size      uint64    `json:"size"`             // 输入体积
-	Predicted uint64    `json:"predicted"`        // 装载前预计峰值
-	Peak      uint64    `json:"peak"`             // 实测峰值（RSS/提交量）
-	OK        bool      `json:"ok"`               // 是否跑完（false 含被中止/被杀）
-	MS        int64     `json:"ms"`               // 耗时
-	Source    string    `json:"source,omitempty"` // 预算来源（排查用）
+	Rung      string    `json:"rung"`                // 执行档名，如 "stream+disk"
+	Size      uint64    `json:"size"`                // 输入体积
+	Predicted uint64    `json:"predicted"`           // 装载前预计峰值
+	Peak      uint64    `json:"peak"`                // 实测峰值（RSS/提交量，含查询聚合段）
+	LoadPeak  uint64    `json:"load_peak,omitempty"` // 装载段峰值：与 Peak 的差就是聚合段吃的
+	OK        bool      `json:"ok"`                  // 是否跑完（false 含被中止/被杀）
+	MS        int64     `json:"ms"`                  // 耗时
+	Source    string    `json:"source,omitempty"`    // 预算来源（排查用）
 	At        time.Time `json:"at"`
 }
 
@@ -114,6 +115,17 @@ func (h *History) refresh() {
 			RatioP10: Quantile(ratios, 0.10), RatioP50: Quantile(ratios, 0.50), RatioP90: Quantile(ratios, 0.90),
 			MSMedian: int64(Quantile(mss, 0.50))})
 	}
+}
+
+// UpdateLastPeak 把最后一条样本的峰值改大（只增不减），用于「装载时先记一条、
+// 查询段跑完再补上最终峰值」：GROUP BY / ORDER BY 的排序可能在装载之后才把峰值推上去，
+// 而装载时先落盘的那一条保证了——即使随后进程被 fatal 杀掉，也已经留下了记录。
+func (h *History) UpdateLastPeak(peak uint64) {
+	if len(h.Samples) == 0 || peak <= h.Samples[len(h.Samples)-1].Peak {
+		return
+	}
+	h.Samples[len(h.Samples)-1].Peak = peak
+	h.refresh()
 }
 
 // Save 原子写回（先写临时文件再改名），避免崩溃时留下半个文件——这份记录存在的意义
