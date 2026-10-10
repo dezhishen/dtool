@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/dezhishen/dtool/internal/perftest"
@@ -68,6 +69,34 @@ func writeBigXlsx(tb testing.TB, dir string, rows int) (string, uint64) {
 		tb.Fatal(err)
 	}
 	return path, uint64(st.Size())
+}
+
+// TestMeasureGenerateXlsx 把 N 行 × 5 列的样本 xlsx 写到指定路径，供**黑盒**边界测试
+// （用发布出来的二进制跑 convert）当输入。生成开销与行数成线性。
+//
+//	DTOOL_GEN_XLSX=/tmp/big.xlsx DTOOL_GEN_ROWS=1048575 go test ./internal/pipeline -run TestMeasureGenerateXlsx -v
+func TestMeasureGenerateXlsx(t *testing.T) {
+	out, rows := os.Getenv("DTOOL_GEN_XLSX"), os.Getenv("DTOOL_GEN_ROWS")
+	if out == "" {
+		t.Skip("设置 DTOOL_GEN_XLSX（输出路径）与 DTOOL_GEN_ROWS（行数）后运行")
+	}
+	n, err := strconv.Atoi(rows)
+	if err != nil || n <= 0 {
+		t.Fatalf("DTOOL_GEN_ROWS = %q", rows)
+	}
+	dir := t.TempDir()
+	path, size := writeBigXlsx(t, dir, n)
+	if err := os.Rename(path, out); err != nil { // 挪出临时目录（同分区，rename 即可）
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if werr := os.WriteFile(out, data, 0o644); werr != nil {
+			t.Fatal(werr)
+		}
+		size = uint64(len(data))
+	}
+	t.Logf("%d 行 xlsx → %s（%.1fMB）", n, out, float64(size)/(1<<20))
 }
 
 // newPerfEnv 关闭内存预检（Budget 返回 0 → 不设全局 debug.SetMemoryLimit），

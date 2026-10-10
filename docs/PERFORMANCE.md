@@ -12,8 +12,8 @@ README 只保留结论与入口，细节以本文为准。
 | 场景 | 结论 |
 |------|------|
 | `convert`（Excel 转换） | 峰值内存 ≈ **32MB + 文件 × 3**，与行数无关；Excel 单表上限（1,048,576 行）内**碰不到内存墙**：53.3MB / 105 万行 × 8 列只要 **72MB**、**1:10** |
-| `query`（JSON 查询，默认 `auto` → `stream`） | 峰值内存 ≈ **文件 × 1.2–1.3**；默认预检下文件 ≤ **~850MB**（预检按 2× 文件估算，超可用 1.7GB 即拦下） |
-| `--max-memory 0`（关闭预检） | 实测 **1.34GB** 文件可跑完（**1637MB**、3:42）；1.77GB 文件未实测，按 1.3× 外推 ≈2.3GB，会越过 2GB 硬上限 |
+| `query`（JSON 查询，默认 `auto` 按预算选档） | 峰值取决于档位：**内存档 ≈ 文件 × 1.3–1.4**（≤ ~1.1GB 输入时用），更大自动降到**磁盘档 ≈ 文件 × 0.02–0.05**；1H2G 实测 **3.4GB / 1830 万行跑通、峰值 59MB**——内存已不是约束，见「1H2G 黑盒边界实测」 |
+| `--max-memory 0`（关闭预检） | 仍会跳过「峰值放大不划算」的档（1GB 输入不做 13× 的整块解析），实测 1.05GiB → `stream+memory`、峰值 **1.42GiB** 跑完（修复前会被内核 OOM 杀，rc=143，见下） |
 | 内存不足时 | **不静默被杀**：预检在 0.01s 内以 rc=4 返回「需 xx / 可用 xx」与退出口（`query`：`--load-mode stream`；`convert`：缩小输入；两者：`--max-memory 0`）；超预算时看门狗先打印原因再中止 |
 
 ## 2. 测试环境
@@ -91,6 +91,12 @@ CI 的 `lint` job 会额外跑一轮 `-bench . -benchtime 1x` 冒烟：只确认
   生成器（指定行数 × 列数，`excelize.NewStreamWriter`，1M 行约 1 分钟）。
 - JSON：按目标体积**拼接同结构数组**（剥离每段的 `[`/`]` 后串联），避免慢速逐行生成；
   各规模文件均由 `dtool` 自身可读的真实结构数据拼成。
+- 边界测试用的样本（可直接复现上表）：
+
+  ```bash
+  DTOOL_GEN_JSON=/tmp/bb/big_1g.json DTOOL_GEN_ROWS=6100000 go test ./internal/query -run TestMeasureGenerate -v
+  DTOOL_GEN_XLSX=/tmp/bb/big_max.xlsx DTOOL_GEN_ROWS=1048575 go test ./internal/pipeline -run TestMeasureGenerateXlsx -v
+  ```
 
 ## 4. 结果
 
@@ -110,6 +116,9 @@ CI 的 `lint` job 会额外跑一轮 `-bench . -benchtime 1x` 冒烟：只确认
 
 ### 4.2 JSON 查询（`query`，1 核 2GB）
 
+> 下表是 **2026-10-10 执行档阶梯引入之前**的实测（当时没有磁盘档，大文件只能靠
+> `--max-memory 0` 硬跑）。当前默认 `auto` 的行为见 4.3 与「1H2G 黑盒边界实测」。
+
 | 输入 | 结果 | 说明 |
 |------|------|------|
 | 17MB / 10 万行 | 3.2s，236MB | 走 full |
@@ -126,28 +135,30 @@ CI 的 `lint` job 会额外跑一轮 `-bench . -benchtime 1x` 冒烟：只确认
 
 ### 4.3 能力边界（1 核 2GB）
 
-预检公式（`internal/memguard` + `internal/pipeline`）：
+选档与预检走的是**执行档阶梯**（`internal/memguard` + `internal/query.ladder`）：
 
 ```
-可用内存 = cgroup 限制（或 --max-memory）× 85%        # 1H2G → 约 1.7GB
-query:  need = Σ 文件大小 × 峰值因子（full 13 / stream 2）
-xlsx:   need = 32MB（固定开销）+ 文件大小 × 6
-need > 可用内存 → 转换/查询前直接以 rc=4 失败并给出数字
+可用内存 = cgroup 限制 / --max-memory × 85%               # 1H2G → 1.7GB
+阈值     = 可用内存 × 80%（探测到硬上限时）                # → 1.4GB
+full   + 内存库：need = 32MB + 文件 × 13，且要求输入 < 32MB、need ≤ 阈值 × 80%
+stream + 内存库：need = 32MB + 文件 × 2     ≤ 阈值 → 用它
+stream + 磁盘库：need = 24MB + 文件 × 0.5   ≤ 阈值 → 用它（最省）
+各档都超阈值 → --mem-policy try（默认）仍按最省档试一次；strict 直接以 rc=4 失败
 ```
 
-| 输入 | 默认预检 | 关闭预检（`--max-memory 0`） |
-|------|----------|------------------------------|
-| JSON ≤ 850MB | 放行 | 放行（实测 456MB → 603MB） |
-| JSON 1.08GB | **拦下**（需 2.0GB > 1.7GB） | 放行：3:03，1403MB |
-| JSON 1.34GB | **拦下**（需 2.67GB） | 放行：3:42，1637MB |
-| JSON 1.77GB | **拦下** | 未实测；按 1.3× 外推 ≈2.3GB，预计被 OOM 杀掉 |
-| xlsx ≤ 4MB | 放行 | — |
-| xlsx 53MB（105 万行） | 放行（需 352MB） | 实测 72MB |
+| 输入（JSON，1H2G） | 选档 | 峰值 RSS | 耗时（参考） |
+|---|---|---|---|
+| ≤ ~1.1GB | `stream+memory` | 文件 × 1.32–1.37 | ≈6.4s/100MB |
+| 1.1GB – 3.4GB | `stream+disk` | **55–59MB（与数据量几乎无关）** | ≈9s/100MB |
+| > ~2.75GB | 估算全超阈值 → 警告后仍按最省档试一次（默认 `try`） | 同上 | 同上 |
+| xlsx 到 Excel 行数上限（1,048,575 行 / 37.7MB） | 两阶段流式 | **55MB** | ≈60s |
 
 要点：
-- **xlsx 侧的瓶颈不是内存**，而是 Excel 格式本身（单表 1,048,576 行 × 16,384 列）。
-- **JSON 侧的瓶颈是内存**：1H2G 下实测上限约 1.34GB（≈1.6GB RSS），再大就会被内核杀掉——
-  所以默认预检取流式 2× 的保守倍率，把「会死」的情况变成「提前报错 + 给退出口」。
+- **xlsx 的瓶颈是格式上限，不是内存**（单表 1,048,576 行 × 16,384 列）。
+- **JSON 的内存边界在 1H2G 上摸不到**：磁盘档把峰值与数据量解耦，3.4GB 输入峰值 59MB。
+  先到的是**估算门禁**（~2.75GB 输入处翻转，默认 `try` 仍会试成功）与**单核耗时**。
+- 唯一会「静默死」的路径是显式关掉检查（`--max-memory 0`）又强制内存档；本次实测发现
+  `--max-memory 0` 曾经跳过体积上限直接选整块解析，已修复（见「1H2G 黑盒边界实测」）。
 
 ### 4.4 基准（4 核不限资源，`-benchtime 1s`）
 
@@ -199,6 +210,63 @@ need > 可用内存 → 转换/查询前直接以 rc=4 失败并给出数字
   其他平台需显式 `--max-memory`。预算为零等于不做检查，此时顶到硬上限的表现可能是结构化错误
   （SQLite `out of memory (7)`，会被翻译成带 hint 的 code 4），也可能是 Go runtime 的
   `fatal error: out of memory`（打印堆栈、退出码 2，无法恢复）。
+
+## 1H2G 黑盒边界实测（2026-10-10，v0.2.1）
+
+口径先说清：**边界看内存，CPU 时间只作参考**。单核耗时只决定「要等多久」（本机 4 核，
+用 `taskset -c 0` + `CPUQuota=100%` 限成 1 核；不同 CPU 的绝对秒数不可比），能不能跑完由
+内存峰值决定——下表主结论一律取 `/usr/bin/time -v` 的 `Maximum resident set size`（VmHWM，
+与 cgroup OOM 判定同一口径）。
+
+测法是**黑盒**：只用已发布的 **v0.2.1** 二进制跑 `query` / `convert`，输入由
+`TestMeasureGenerate`（JSON）与 `TestMeasureGenerateXlsx`（xlsx）生成。1H2G 用 systemd 模拟：
+
+```bash
+systemd-run --user --scope -q -p MemoryMax=2G -p MemorySwapMax=0 -p CPUQuota=100% -- \
+  taskset -c 0 /usr/bin/time -v dtool query --workspace /tmp/ws \
+  --sql "select ip, count(*) c, sum(bytes) s from data group by ip order by s desc limit 5" \
+  --source data=/tmp/bb/big_1g.json --timeout 600s
+```
+
+工具在该环境下探测到的预算：cgroup 上限 2.0GB → 可用（含 85% 余量）1.7GB → **阈值 1.4GB**，
+看门狗与硬上限都开着（`meminfo` 的 `guard.threshold_human=1.4GB` 可核对）。
+
+### JSON 查询（一条 group by + order by 聚合）
+
+| 输入 | 行数 | 选档 | 峰值 RSS | 峰值/输入 | 耗时（参考） | 预检估算 vs 阈值 1.4GB |
+|------|------|------|----------|-----------|--------------|------------------------|
+| 267MB (0.25GiB) | 145 万 | `stream+memory` | 367MB | 1.37× | 40s | 541MB，放行 |
+| 562MB (0.52GiB) | 305 万 | `stream+memory` | 741MB | 1.32× | 84s | 1.1GB，放行 |
+| 1126MB (1.05GiB) | 610 万 | `stream+disk` | **58MB** | 0.05× | 173s | 561MB，放行 |
+| 2255MB (2.10GiB) | 1220 万 | `stream+disk` | **55MB** | 0.02× | 350s | 1.1GB，放行 |
+| 3388MB (3.16GiB) | 1830 万 | `stream+disk` | **59MB** | 0.017× | 531s | 1.6GB **超阈值** → 警告后仍试，成功 |
+
+xlsx：**1,048,575 行（Excel 单表上限）× 5 列 = 37.7MB → 峰值 55MB、60s**。
+
+### 失败与临界行为
+
+| 场景 | 结果 |
+|------|------|
+| 3.16GiB + `--mem-policy strict` | rc=4、**0.0s** 拒绝（峰值 14MB）：`预计内存不足，已按 --mem-policy strict 中止：3.2GB`，hint 给退出口，Action 记为 `failed` |
+| 2.10GiB + 强制 `--store memory` | rc=4、峰值 **1389MB**：看门狗在预算处干净中止 `内存即将耗尽，已中止：memory pressure: 本进程已用 1.4GB，本次预算 1.4GB`——**没有被内核 OOM 杀掉**，进程活着、错误可读、留有退出口 |
+| 3.16GiB 默认（`try`） | rc=0、峰值 59MB：估算超阈值仍按最省档试一次并成功 |
+| 1.05GiB + `--max-memory 0`（修复前） | **rc=143 被内核 OOM 杀**（等于 cgroup MemoryMax=2G），stdout 空、没有任何错误 JSON |
+| 1.05GiB + `--max-memory 0`（修复后） | rc=0、峰值 **1.42GiB**、选 `stream+memory`，理由写明「full+memory 峰值是输入 13 倍不划算」 |
+
+### 结论
+
+1. **JSON 侧的内存边界在 1H2G 上摸不到**：1GB 以上自动降到磁盘档，峰值与数据量**解耦**
+   （3.4GB → 59MB）。内存档只在 ≤ ~1.1GB 时使用，实测 1.32–1.37×（预检按 2× 估，保守）。
+2. **1H2G 上先撞到的是「预检估算」，不是内存**：阈值 1.4GB 下估算在 **~2.75GB 输入**处翻转
+   （0.5 × 输入 + 24MB > 1.4GB）。翻转后默认 `--mem-policy try` 仍会按最省档试一次
+   （实测 3.4GB 成功），`--mem-policy strict` 才会 0.0s 拒绝。
+3. **CPU 只决定「等多久」**（参考值）：单核装入吞吐 ≈ **16MB/s**（≈6.4s/100MB），3.4GB ≈ 8.9 分钟；
+   `--timeout` 只约束查询阶段，调大即可，不影响成败。
+4. **xlsx 侧的边界是格式上限**（单表 1,048,576 行）：顶格样本峰值只有 55MB。
+5. **失败都可读**：唯一的「静默死」是显式关掉检查（`--max-memory 0`）又强制内存档——顺带
+   **修掉了一个把用户送进这条路线的缺陷**：`--max-memory 0` 曾经绕过档位的体积上限直接选
+   整块解析（13×），1.05GiB 输入直接被内核 OOM 杀。现在无预算时也会跳过「峰值放大不划算」的
+   档再取最快档（`internal/memguard`，回归测试 `TestChooseWithoutBudgetStillRespectsMaxInput`）。
 
 ## 执行档阶梯实测（1 核，2026-10）
 
