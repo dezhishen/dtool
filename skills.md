@@ -179,6 +179,10 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
 - 看到 stderr 的「载入 xxx.json（…，流式解析，预计需约 xx 内存）...」说明正在载入；若进程随后消失，就是内存不够。
 - 内存超出预算时看门狗会先打印「内存超出预算（本进程已用 xx，预算 xx），正在中止」，再以 `code: 4` 失败——不会静默卡住。显式 `--load-mode full` 时也是逐元素解码、可被中止，长文件不会再出现「几十秒没有任何输出」。
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
+- 预算来源随平台不同：Linux 读 cgroup/系统可用内存，Windows 读 **Job Object 进程内存上限**（存在即生效），
+  其他平台（如 macOS）**不自动探测**——拿不到预算时预检与看门狗都不工作，所以容器/受限环境里请显式给
+  `--max-memory`。顶到外部硬上限时可能看到「内存不足：…SQLite 分配失败」（code 4，含 hint），
+  极端情况下是 Go 的 `fatal error: out of memory`（不可恢复）——后者只会在没有预算可比对时发生。
 - 性能结论有回归测试（环境/方式/结果见 `docs/PERFORMANCE.md`），随 `go test ./...` 执行：`TestPerfLoadModeMemoryRatio`（流式峰值须低于整块解析 1.3 倍以上）、`TestPerfConvertExcelMemory`（转换峰值不得超过预检倍率）。吞吐用 `make bench` 看，`DTOOL_BENCH_ROWS=N` 放大，`-short` 跳过这些回归。
 
 ## 注意事项

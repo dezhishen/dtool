@@ -66,6 +66,9 @@ dtool --max-memory 32K query --sql "SELECT COUNT(*) AS 行数 FROM orders"
 - `--load-mode` 只对 JSON 装入（`query`）有效，且对 JOIN 中**每个**数据源分别生效；`convert` 没有这个参数
   —— Excel 转换只有一个流式实现，要降内存只能缩小输入（拆文件、裁列）；传了不生效，CLI 会在 stderr 提示「已忽略」。
 - 确需强行运行时 `--max-memory 0` 关闭检查；真的超预算时，看门狗会先在 stderr 打印「内存超出预算（已用 xx，预算 xx），正在中止」，再以 `code: 4` 失败，不会静默卡住。
+- 预算的自动探测：Linux 用 cgroup/系统可用内存，Windows 用 Job Object 上限，**macOS 等平台没有**——
+  在容器或受限环境里务必显式 `--max-memory`；拿不到预算时顶到硬上限可能只剩 SQLite `out of memory (7)`
+  甚至 Go runtime 的 fatal error。
 - 1 核 2GB 下的实测数字与能力边界见 [docs/PERFORMANCE.md](../PERFORMANCE.md)。
 
 ## ★★ 沙箱：危险 SQL 会被拦

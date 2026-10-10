@@ -172,7 +172,16 @@ go test ./internal/query -bench LoadStream -benchmem   # 只看某一项
 - **留余量**：`auto` 只有在整块解析峰值 ≤ 预算 80% 时才选它，否则走流式；显式 `--load-mode full` 且逼近预算时会提前提示；
 - **载入进度**：数据源 ≥8MB 时向 stderr 打印「载入 xx（大小，装入方式，预计需约 xx 内存）...」，即使进程被强杀也能看出卡在哪里。
 
-自动探测 cgroup v2/v1 内存限制与系统可用内存（macOS/Windows 上需显式指定）。可用全局参数覆盖：
+**探测来源**（决定上面这些预检/看门狗的数字从哪来）：Linux 读 cgroup v2/v1 与系统可用内存；
+Windows 读 **Job Object 的进程内存上限**（`JOB_OBJECT_LIMIT_PROCESS_MEMORY`，CI/沙箱常用）与系统可用内存，
+进程用量按工作集计算；macOS 等平台不做自动探测，请用 `--max-memory` 显式给出——否则预检与看门狗
+都处于关闭状态，只能等外部硬上限把分配打回来。
+
+⚠️ 关闭检查（`--max-memory 0`）或平台探测不到上限时，顶到硬上限的失败方式**不可控**：
+可能是可读的结构化错误（`内存不足：…SQLite 分配失败`，code 4，驱动原文 `out of memory (7)`），
+也可能是 Go runtime 的 `fatal error: out of memory`（**不可恢复**，会打印 goroutine 堆栈、退出码 2）。
+根因是 modernc/SQLite 的页缓存走 mmap/VirtualAlloc，不受 Go 堆软上限约束，
+所以「给得出预算」比「靠运气」重要——容器里请显式 `--max-memory`（或让 dtool 读到 cgroup/Job Object）。可用全局参数覆盖：
 
 ```bash
 dtool query --max-memory 4G --sql '...'   # 显式预算

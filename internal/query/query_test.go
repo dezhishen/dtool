@@ -231,6 +231,26 @@ func TestEmptyResultIsNonNil(t *testing.T) {
 
 // 被信号打断（Ctrl+C / SIGTERM）与「跑完但出错」是两种语义：前者结果未知、
 // 重跑即可（code 5），后者要改输入（code 4）。
+// 驱动顶到外部内存上限时返回 SQLITE_NOMEM（文本 "out of memory (7)"）：
+// 要翻译成「发生了什么 + 怎么办」，而不是把驱动原文抛给用户。
+func TestSQLiteNOMEMExplained(t *testing.T) {
+	raw := errors.New("载入 access_log_1m.json: out of memory (7)")
+	err := wrapErr(context.Background(), Options{}, raw, "load")
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeExec {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(te.Message, "内存不足") || !strings.Contains(te.Detail, "out of memory") || te.Hint == "" {
+		t.Fatalf("NOMEM 缺少可操作说明：%+v", te)
+	}
+
+	// 普通错误不该被误判
+	other := wrapErr(context.Background(), Options{}, errors.New("SQL logic error: no such column: x (1)"), "query")
+	if strings.Contains(other.Error(), "内存不足") {
+		t.Fatalf("普通错误被误判为 NOMEM：%v", other)
+	}
+}
+
 func TestCanceledContextIsInterrupted(t *testing.T) {
 	ws, cwd := setup(t)
 	ctx, cancel := context.WithCancel(context.Background())

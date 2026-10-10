@@ -181,3 +181,25 @@ func TestDetectAndUsage(t *testing.T) {
 		t.Fatalf("bad env should be ignored: %+v", m)
 	}
 }
+
+// Windows Job Object 场景的预算推导：可在 Linux 上验证（纯计算）。
+func TestBudgetFromJobLimit(t *testing.T) {
+	const mb = 1 << 20
+	cases := []struct {
+		name             string
+		limit, used, sys uint64
+		want             uint64
+	}{
+		{"job 256MB、已用 40MB、系统充足", 256 * mb, 40 * mb, 8 << 30, 216 * mb},
+		{"系统可用更紧时取更紧", 256 * mb, 40 * mb, 100 * mb, 100 * mb},
+		{"已经顶到上限", 256 * mb, 256 * mb, 8 << 30, 0},
+		{"上限超过已用但系统可用为 0（探测失败）", 256 * mb, 40 * mb, 0, 216 * mb},
+		{"没有上限时用系统可用", 0, 0, 8 << 30, 8 << 30},
+		{"两者都没有（不检查）", 0, 0, 0, 0},
+	}
+	for _, c := range cases {
+		if got := budgetFrom(c.limit, c.used, c.sys); got != c.want {
+			t.Errorf("%s: budgetFrom(%d,%d,%d) = %d, want %d", c.name, c.limit, c.used, c.sys, got, c.want)
+		}
+	}
+}

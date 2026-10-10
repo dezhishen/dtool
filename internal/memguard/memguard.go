@@ -80,6 +80,23 @@ func HumanSize(n uint64) string {
 }
 
 // Budget 决定内存预算：显式 --max-memory 优先，其次 cgroup / 系统可用内存；都拿不到时 Available 为 0（不检查）。
+// budgetFrom 按「外部硬上限」推导可用预算：min(上限-已用, 系统可用)。
+// 上限未知（0）时退回系统可用内存；两者都没有则返回 0（不检查）。
+// 抽出来是为了让 Windows Job Object 的判定能在 Linux 上单测。
+func budgetFrom(limit, used, sysAvail uint64) uint64 {
+	var avail uint64
+	if limit > 0 {
+		if limit <= used {
+			return 0 // 已经顶到上限：不再拿系统可用内存当退路
+		}
+		avail = limit - used
+	}
+	if sysAvail > 0 && (avail == 0 || sysAvail < avail) {
+		avail = sysAvail // 上限未知，或系统可用更紧：取更紧的那个
+	}
+	return avail
+}
+
 func Budget(explicit *uint64) Memory {
 	if explicit != nil {
 		if *explicit == 0 {

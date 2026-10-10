@@ -154,6 +154,18 @@ func collect(ctx context.Context, db *sql.DB, sqlText string, max int) (*types.Q
 
 const phaseQuery = "query"
 
+// sqliteNOMEM 识别 modernc/sqlite 的分配失败（SQLITE_NOMEM，驱动文本是
+// "out of memory (7)"）。它的页缓存是 mmap 出来的，不计入 Go 堆，所以当进程顶到
+// 外部硬上限（Windows Job Object、cgroup、ulimit）时会直接返回这个错误——此时
+// debug.SetMemoryLimit 帮不上忙，只有 --max-memory 预检与看门狗能提前拦住。
+func sqliteNOMEM(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "out of memory") || strings.Contains(msg, "sqlite_nomem")
+}
+
 // phaseLabel 把内部阶段名翻成用户看得懂的词。
 func phaseLabel(phase string) string {
 	if phase == "load" {
@@ -179,6 +191,13 @@ func wrapErr(ctx context.Context, o Options, err error, phase string) error {
 		// 结果未知，重跑即可，不该让调用方去改输入。
 		te := types.Errorf(types.CodeInterrupted, "已中断：%s阶段未完成（收到 Ctrl+C / SIGTERM）", phaseLabel(phase))
 		te.Hint = "重跑该命令即可；数据源与 SQL 本身没有问题"
+		return te
+	}
+	if sqliteNOMEM(err) {
+		// 把驱动原文（"载入 x.json: out of memory (7)"）翻译成「发生了什么 + 怎么办」。
+		te = types.Errorf(types.CodeExec, "内存不足：%s阶段 SQLite 分配失败", phaseLabel(phase))
+		te.Detail = err.Error() + "（进程顶到了外部内存上限，Go 堆软上限管不到 mmap 出去的页缓存）"
+		te.Hint = "缩小输入或改用 --load-mode stream；若是被容器/Job Object/ulimit 限制，用 --max-memory 显式声明预算让预检提前拦住（Windows 会自动识别 Job Object，macOS 需显式指定）"
 		return te
 	}
 	te = types.Errorf(types.CodeExec, "%s", err.Error())

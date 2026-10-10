@@ -184,3 +184,9 @@ need > 可用内存 → 转换/查询前直接以 rc=4 失败并给出数字
 - 整块解析改为**逐元素解码**（`internal/query/load.go:decodeRows`）：不再同时持有「文件原始字节
   + 解码后的行」，15MB 文件峰值 169MB（此前同预算下会被中止）；每 4096 行检查一次 ctx，
   内存超预算时能及时中止。
+- 用量口径按**工作集/RSS**，不是 Go 堆：modernc/SQLite 的页缓存是 mmap/VirtualAlloc 出来的，
+  `debug.SetMemoryLimit` 管不到它，只有预检 + 看门狗能提前拦住。
+- 平台探测：Linux 用 cgroup v2/v1 + 系统可用内存；Windows 用 Job Object 进程内存上限 + 系统可用内存；
+  其他平台需显式 `--max-memory`。预算为零等于不做检查，此时顶到硬上限的表现可能是结构化错误
+  （SQLite `out of memory (7)`，会被翻译成带 hint 的 code 4），也可能是 Go runtime 的
+  `fatal error: out of memory`（打印堆栈、退出码 2，无法恢复）。
