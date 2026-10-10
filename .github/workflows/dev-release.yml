@@ -110,8 +110,11 @@ jobs:
         if: steps.decide.outputs.release == 'true'
         run: |
           set -euo pipefail
-          notes="$(printf 'main 的最新构建（滚动发布：资产每次构建覆盖，只保留最新一次）\n\n- 版本: %s\n- commit: %s\n- 构建: %s/actions/runs/%s\n- 触发: %s\n' \\
-            "$DEV_VERSION" "$GITHUB_SHA" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME")"
+          # 说明正文交给脚本生成（有单测）：以前写在 $(printf '...' \ 续行里，
+          # 反斜杠在 YAML 里被写坏时第二行参数会被 shell 当成命令，CI 上炸过。
+          notes="$(bash scripts/dev-release-notes.sh "$DEV_VERSION" "$GITHUB_SHA" \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" "$GITHUB_EVENT_NAME")"
+          printf '%s\n' "$notes"
           if ! gh release view dev >/dev/null 2>&1; then
             gh release create dev --prerelease --latest=false --title "$DEV_VERSION" --notes "$notes"
           fi
