@@ -64,6 +64,9 @@ const (
 	priorRatioSD   = 0.30
 	// priorWeight：先验等价于几个样本（样本少时靠它把概率拉回保守侧）。
 	priorWeight = 3.0
+	// maxCalibration：历史校准倍数上限。再离谱的样本也不至于让估算翻十几倍，
+	// 否则第一个坏样本就会把这一档永久拉黑。
+	maxCalibration = 8.0
 )
 
 // Policy 决定「所有档都预计放不下」时怎么办。
@@ -98,15 +101,21 @@ type Rejected struct {
 
 // Plan 是选档结果。
 type Plan struct {
-	Chosen    Candidate  `json:"chosen"`
-	Predicted uint64     `json:"predicted"`
-	Threshold uint64     `json:"threshold"`
-	Headroom  float64    `json:"headroom"` // Threshold/Predicted
-	Chance    float64    `json:"chance"`   // 按历史估计「试这一档能过」的概率
-	Forced    bool       `json:"forced"`   // 操作者显式指定
-	Risky     bool       `json:"risky"`    // 所有档都预计放不下，仍按策略试
-	Reason    string     `json:"reason"`
-	Rejected  []Rejected `json:"rejected,omitempty"`
+	Chosen Candidate `json:"chosen"`
+	// Predicted 是**按历史校准后**的预计峰值（见 Calibration / RawPredicted）：
+	// 同档历史显示过「实测是预计的 N 倍」时，这里就按 N 倍估——否则试错不收敛
+	// （判「放得下」的档会反复被选中，每次都白撞一次看门狗）。
+	Predicted    uint64     `json:"predicted"`
+	RawPredicted uint64     `json:"raw_predicted,omitempty"`
+	Calibration  float64    `json:"calibration,omitempty"`
+	CalibSamples int        `json:"calibration_samples,omitempty"`
+	Threshold    uint64     `json:"threshold"`
+	Headroom     float64    `json:"headroom"` // Threshold/Predicted
+	Chance       float64    `json:"chance"`   // 按历史估计「试这一档能过」的概率
+	Forced       bool       `json:"forced"`   // 操作者显式指定
+	Risky        bool       `json:"risky"`    // 所有档都预计放不下，仍按策略试
+	Reason       string     `json:"reason"`
+	Rejected     []Rejected `json:"rejected,omitempty"`
 }
 
 // ChooseRequest 是选档的全部输入。
@@ -167,10 +176,16 @@ func Choose(r ChooseRequest) (Plan, error) {
 	for _, c := range r.Candidates {
 		p := r.plan(c)
 		if p.Predicted <= p.Threshold {
+			calib := ""
+			if p.Calibration > 1 {
+				calib = fmt.Sprintf("（按本档历史实测上修 ×%.1f，%d 条样本）", p.Calibration, p.CalibSamples)
+			}
 			if len(rejected) > 0 {
-				p.Reason = fmt.Sprintf("预计峰值 %s ≤ 阈值 %s，放得下", HumanSize(p.Predicted), HumanSize(p.Threshold))
+				p.Reason = fmt.Sprintf("预计峰值 %s%s ≤ 阈值 %s，放得下",
+					HumanSize(p.Predicted), calib, HumanSize(p.Threshold))
 			} else {
-				p.Reason = fmt.Sprintf("最快档且预计峰值 %s ≤ 阈值 %s", HumanSize(p.Predicted), HumanSize(p.Threshold))
+				p.Reason = fmt.Sprintf("最快档且预计峰值 %s%s ≤ 阈值 %s",
+					HumanSize(p.Predicted), calib, HumanSize(p.Threshold))
 			}
 			p.Rejected = rejected
 			return p, nil
@@ -202,13 +217,51 @@ func Choose(r ChooseRequest) (Plan, error) {
 
 // plan 填充单个档的判定数字。
 func (r ChooseRequest) plan(c Candidate) Plan {
-	pred := c.Predicted(r.Size)
-	p := Plan{Chosen: c, Predicted: pred, Threshold: r.Memory.Threshold()}
+	raw := c.Predicted(r.Size)
+	pred, calib, n := r.Calibrated(c)
+	p := Plan{Chosen: c, Predicted: pred, RawPredicted: raw, Calibration: calib, CalibSamples: n,
+		Threshold: r.Memory.Threshold()}
 	if p.Threshold > 0 {
 		p.Headroom = float64(pred) / float64(p.Threshold)
 	}
 	p.Chance = TryChance(r.Samples, c.Name, pred, p.Threshold)
 	return p
+}
+
+// Calibrated 用**同档**历史把估算往上修：ratio = 实测/预计 的 P90 就是「这一档最坏
+// 能超多少」。只上修不下修——下修正好和「估错要偏保守」相反。
+//
+// 没有这一步，试错不会收敛：预算 139MB 而估算 56MB 的档会被判「放得下」反复选中，
+// 哪怕历史已显示它实测要 3 倍（Windows 小输入就是这种情形），每次都白撞一次看门狗。
+func (r ChooseRequest) Calibrated(c Candidate) (uint64, float64, int) {
+	pred := c.Predicted(r.Size)
+	ratios := sameRungRatios(r.Samples, c.Name)
+	if len(ratios) == 0 || pred == 0 {
+		return pred, 1, 0
+	}
+	mult := Quantile(ratios, 0.90)
+	if mult <= 1 {
+		return pred, 1, len(ratios)
+	}
+	if mult > maxCalibration {
+		mult = maxCalibration
+	}
+	return uint64(float64(pred) * mult), mult, len(ratios)
+}
+
+// sameRungRatios 只取同一档的 ratio：跨档混合等于拿「磁盘档的偏差」去校准「内存档」，
+// 倍率体系不同，没有可比性。
+func sameRungRatios(samples []Sample, rung string) []float64 {
+	var out []float64
+	for _, s := range samples {
+		if s.Rung != rung {
+			continue
+		}
+		if v := ratio(s); v > 0 {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // TryChance 估计「按预计峰值 pred、阈值 threshold，这一档实际能跑过去」的概率：

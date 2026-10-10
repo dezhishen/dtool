@@ -221,10 +221,22 @@ func TestPickJobLimit(t *testing.T) {
 		{"没有内存上限标志", 0x40, 256 << 20, 512 << 20, 0, ""},
 	}
 	for _, c := range cases {
-		limit, src := pickJobLimit(c.flags, c.process, c.job)
+		limit, src, _ := pickJobLimit(c.flags, c.process, c.job)
 		if limit != c.wantLimit || src != c.wantSrc {
 			t.Errorf("%s: pickJobLimit = (%d,%q), want (%d,%q)", c.name, limit, src, c.wantLimit, c.wantSrc)
 		}
+	}
+
+	// 第三种返回值专门回答「标志位设了、值却是 0」：这既不是「没设上限」，
+	// 也不能当作「没有限制」——B 变体（0x2000 + 值 0）就是栽在这里。
+	if _, _, zero := pickJobLimit(jobObjectLimitJobMemory, 0, 0); len(zero) != 1 {
+		t.Fatalf("应报告 0x2000 的值为 0：%v", zero)
+	}
+	if _, _, zero := pickJobLimit(0x2000|0x100, 0, 0); len(zero) != 2 {
+		t.Fatalf("两个标志位都应报告：%v", zero)
+	}
+	if _, _, zero := pickJobLimit(jobObjectLimitJobMemory, 0, 256<<20); len(zero) != 0 {
+		t.Fatalf("值正常时不该报告：%v", zero)
 	}
 }
 

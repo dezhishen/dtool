@@ -225,6 +225,15 @@ dtool query --load-mode full --store disk   # 报用法错误：full 的峰值�
 dtool query --mem-policy strict --sql '...' # 连最省档都放不下时直接失败，不试
 ```
 
+估算倍率是**上界**，平台差异可以很大（同一份 12MB 输入：Linux 上内存档 1.4×，
+Windows 沙箱里实测到 ≈15×）。所以估算会**按本档历史实测上修**（8 倍封顶，只用同档样本）：
+第一次撞上看门狗后写一条失败样本，第二次就会自动降到磁盘档——**同一台机器、同一个输入
+只付一次试错代价**。`meminfo` 的 `plan.rungs` 里能看到 `raw_need` 与校准后的 `need`。
+
+Windows 上若 Job Object 只置了标志位、值读回 0（`job_object.limit_unreadable`），
+预算就只是「本机空闲内存」，**不可信**：此时会明确警告并排除整块解析档（峰值比输入大
+一个数量级的那一档），必要时用 `--store disk` 进一步压低峰值。
+
 每次实际用的档会写进结果（`strategy` / `strategy_note`）与 Action，`meminfo` 会列出
 整条阶梯的预计峰值与历史成功率。执行的实测结果按「预计/实测」记入
 `.dtool/plans/samples.json`（`--no-record` 时不写）：**同一台机器、同一个输入只付一次

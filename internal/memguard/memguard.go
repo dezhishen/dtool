@@ -87,6 +87,10 @@ type Memory struct {
 	Available uint64 // 预计可用（已含余量），0 表示不做检查
 	Source    string // 判定来源，用于报错信息
 	Hard      bool   // 来源是外部**硬上限**（cgroup / Job Object）：超了不可恢复
+	// Uncertain：进程看起来受外部限制，但上限读不出来（Windows Job Object 的标志位
+	// 设了、值却是 0）。此时 Available 只是「本机空闲内存」，不是「允许你用的量」，
+	// 选档要排除峰值比输入大一个数量级的档（整块解析），并明确告知用户。
+	Uncertain bool
 }
 
 // ParseBytes 解析 512M / 1.5G / 2097152 这类容量；0 或空表示不限制。

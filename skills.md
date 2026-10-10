@@ -201,6 +201,11 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
   | `code=5`（被杀） | `actions show <id>` 看 `strategy`，再用更省档重跑一次；同一输入连续两次 `code=5` 就停止并上报 |
   默认策略 `try` 会在预计放不下时**仍试一次**（宁可慢，不要崩），`--mem-policy strict` 才是直接失败。
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
+- 估算会**按本档历史上修**（`plan.rungs[].calibration`，8 倍封顶）：同一档历史显示过
+  「实测是预计的 N 倍」时，下次就按 N 倍估。所以同输入第一次可能撞看门狗（`code=4`），
+  第二次就会自动换到更省的档——**别把第一次的失败当成结论**，重跑一次再看。
+- Windows 上 `job_object.limit_unreadable=true`（标志位设了但值读回 0）意味着预算只是
+  本机空闲内存、不可信：工具会警告并自动排除整块解析档；要准确就 `--max-memory` 或 `--store disk`。
 - 选档历史在 `.dtool/plans/samples.json`（预计 vs 实测峰值、耗时、成功与否 + 派生分位统计）；
   `--no-record` 时不写。它让「试错」跨进程累积：崩过一次的档下次不会再被优先选中。
 - 排查「预检/看门狗到底在不在工作」：`dtool meminfo [--source alias=文件]`（预算来源、原始探测字段与预检预演）；

@@ -1,6 +1,9 @@
 package memguard
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // 这里放 Windows 侧的结构体定义，放在无 build tag 的文件里是为了能在 Linux 上
 // 用 unsafe.Offsetof 断言布局——**布局错了不会编译失败，只会读出垃圾值**：
@@ -27,30 +30,43 @@ type JobInfo struct {
 	LimitFlagsHex   string `json:"limit_flags_hex"`
 	ProcessMemLimit uint64 `json:"process_memory_limit"`
 	JobMemLimit     uint64 `json:"job_memory_limit"`
-	UsedLimit       uint64 `json:"used_limit"`
-	UsedLimitSource string `json:"used_limit_source,omitempty"`
-	TotalPhys       uint64 `json:"total_phys,omitempty"`
-	AvailPhys       uint64 `json:"avail_phys,omitempty"`
-	UsageNow        uint64 `json:"usage_now,omitempty"`
-	Note            string `json:"note,omitempty"`
+	// Peak* 是 Job 自己的用量峰值：>0 说明这份 extended 结构确实被系统维护着，
+	// 「标志位设了但值读到 0」时用它区分「设置方没写值」与「我们读错字段」。
+	PeakProcessMemUsed uint64 `json:"peak_process_memory_used,omitempty"`
+	PeakJobMemUsed     uint64 `json:"peak_job_memory_used,omitempty"`
+	UsedLimit          uint64 `json:"used_limit"`
+	UsedLimitSource    string `json:"used_limit_source,omitempty"`
+	TotalPhys          uint64 `json:"total_phys,omitempty"`
+	AvailPhys          uint64 `json:"avail_phys,omitempty"`
+	UsageNow           uint64 `json:"usage_now,omitempty"`
+	Note               string `json:"note,omitempty"`
 }
 
 // pickJobLimit 从 LimitFlags 与两个字段里挑出真正生效的上限。
 // 两种都认：JOB_OBJECT_LIMIT_PROCESS_MEMORY(0x100) 限单进程提交量；
 // JOB_OBJECT_LIMIT_JOB_MEMORY(0x2000) 限整个 job 的提交量（只有本进程时等价），
 // 同时设置时取更小的那个。
-func pickJobLimit(flags uint32, processLimit, jobLimit uint64) (uint64, string) {
+func pickJobLimit(flags uint32, processLimit, jobLimit uint64) (uint64, string, []string) {
 	var limit uint64
 	src := ""
-	if flags&jobObjectLimitProcessMemory != 0 && processLimit > 0 {
-		limit, src = processLimit, "process"
-	}
-	if flags&jobObjectLimitJobMemory != 0 && jobLimit > 0 {
-		if limit == 0 || jobLimit < limit {
-			limit, src = jobLimit, "job"
+	var zero []string
+	if flags&jobObjectLimitProcessMemory != 0 {
+		if processLimit > 0 {
+			limit, src = processLimit, "process"
+		} else {
+			zero = append(zero, "JOB_OBJECT_LIMIT_PROCESS_MEMORY(0x100)")
 		}
 	}
-	return limit, src
+	if flags&jobObjectLimitJobMemory != 0 {
+		if jobLimit > 0 {
+			if limit == 0 || jobLimit < limit {
+				limit, src = jobLimit, "job"
+			}
+		} else {
+			zero = append(zero, "JOB_OBJECT_LIMIT_JOB_MEMORY(0x2000)")
+		}
+	}
+	return limit, src, zero
 }
 
 // jobVerdict 把两次系统调用的原始结果整理成结论：在不在 Job 里、采纳哪个上限、为什么。
@@ -86,9 +102,23 @@ func jobVerdict(inJobR1, inJobErr uint32, queryOK bool, queryErr uint32,
 	info.LimitFlagsHex = fmt.Sprintf("0x%X", flags)
 	info.ProcessMemLimit = uint64(processLimit)
 	info.JobMemLimit = uint64(jobLimitBytes)
-	limit, src := pickJobLimit(flags, processLimit, jobLimitBytes)
+	limit, src, zeroFlags := pickJobLimit(flags, processLimit, jobLimitBytes)
 	info.UsedLimit, info.UsedLimitSource = limit, src
-	if limit == 0 {
+	switch {
+	case limit > 0:
+		// 正常：标志位与值都在
+	case len(zeroFlags) > 0:
+		// 标志位设了、值却是 0：Windows 没回读到上限。可能是设置方只置了标志位
+		// （常见 harness bug），也可能用了不含该字段的信息类。此时**不能**当作
+		// 「没有上限」——预算会静默回落到系统可用内存（曾因此让沙箱里的 14.5GB
+		// 假预算放行了本该被限制的输入）。
+		info.LimitUnreadable = true
+		info.Note = joinNote(info.Note, fmt.Sprintf(
+			"LimitFlags 设了 %s 但读回的值是 0：Windows 没回读到上限。"+
+				"设置方可能只置了标志位、或用了不含该字段的信息类；"+
+				"确认沙箱上限请用 --max-memory 显式指定（meminfo 的 job_object 里有原始字段）",
+			strings.Join(zeroFlags, "、")))
+	default:
 		info.Note = joinNote(info.Note, "Job 里没有设置内存上限（LimitFlags 既无 0x100 也无 0x2000）")
 	}
 	return info, limit, src

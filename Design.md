@@ -954,6 +954,17 @@ Chance = (n·经验CDF + 先验权重3·正态CDF(ratio~N(0.85, 0.30))) / (n + 3
 样本 < 5 条时并入其他档的 ratio（偏差形态共通），> 200 条按时间裁剪。先验保证
 「没有历史时偏保守」而不是偏乐观。
 
+**(b) 估算按历史校准**：倍率只是上界，平台差异极大（同一份 12MB 输入：Linux 内存档
+1.44×，Windows 沙箱实测 ≈15×）。于是每次执行后把「预计 vs 实测」写进历史，选档时按
+**同档** ratio 的 P90 上修估算（8 倍封顶，只上修不下修）：没有这一步，判「放得下」的
+档会被反复选中、反复撞看门狗，试错永不收敛；有了它，同一个输入第二次就换到能过的档。
+`meminfo` 的 `plan.rungs[]` 同时给出 `raw_need`（倍率直算）与 `need`（校准后）。
+
+**(c) 上限读不到时不装作知道**：Windows 上 Job Object 可能「标志位设了、值读回 0」
+（`job_object.limit_unreadable`）。此时预算只是本机空闲内存，`Memory.Uncertain=true`：
+选档排除整块解析档（峰值比输入大一个数量级），stderr 与 `meminfo.warnings` 都明确说
+「预算不可信，请用 --max-memory 指定」。操作者显式 `--load-mode full` 时不干预。
+
 **记录**（`.dtool/plans/samples.json`，`--no-record` 时不写）：每次执行写一条
 `{rung, size, predicted, peak, ok, ms, source, at}`，保存时重算派生统计（成功率、
 ratio 的 P10/P50/P90、耗时中位数）。fatal 崩溃时进程什么都不剩，只有这份记录还在——

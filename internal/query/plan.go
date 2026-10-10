@@ -261,10 +261,15 @@ func previewPlan(loadMode, store, memPolicy string, mem memguard.Memory, planFil
 			Chance: memguard.TryChance(hist.Samples, spec.Name, spec.Predicted(size), plan.Threshold),
 		})
 	}
+	req := memguard.ChooseRequest{Size: total, Memory: mem,
+		Candidates: candidateList(cands), Policy: policyOf(memPolicy), Samples: hist.Samples}
 	for _, c := range cands {
-		pred := c.Predicted(total)
+		pred, calib, n := req.Calibrated(c.Candidate)
+		raw := c.Predicted(total)
 		out.Rungs = append(out.Rungs, RungPreview{
 			Name: c.Name, Note: c.Note, Need: pred, NeedHuman: memguard.HumanSize(pred),
+			RawNeed: raw, RawNeedHuman: memguard.HumanSize(raw),
+			Calibration: calib, CalibSample: n,
 			Chance: memguard.TryChance(hist.Samples, c.Name, pred, plan.Threshold),
 			Chosen: c.Name == spec.Name,
 		})

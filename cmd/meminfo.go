@@ -21,6 +21,10 @@ func warnings(job memguard.JobInfo, usage uint64, mem memguard.Memory) []string 
 	var out []string
 	if runtime.GOOS == "windows" {
 		switch {
+		case job.LimitUnreadable && job.QueryOK:
+			out = append(out, "Job Object 的标志位设了但值读到 0（"+job.LimitFlagsHex+
+				"）：预算按本机空闲内存算是**不可信的**，请用 --max-memory 显式指定沙箱上限；"+
+				"本次查询已排除整块解析档（峰值比输入大一个数量级）")
 		case job.LimitUnreadable:
 			out = append(out, fmt.Sprintf(
 				"看起来在 Job Object 里但读不到上限（QueryInformationJobObject last_error=%d），"+

@@ -196,3 +196,64 @@ func TestPlanFileUnderWorkspace(t *testing.T) {
 		t.Fatalf("PlanFile = %q", got)
 	}
 }
+
+// Windows 小输入的真实情形：12MB 输入在内存档上实测到 183MB（≈15× 输入），
+// 但按倍率估算只有 56MB。若历史不参与估算，这一档会被反复选中、反复撞看门狗——
+// 试错永远不收敛。校准后应当改选更省的档。
+func TestCalibrationFromHistoryConverges(t *testing.T) {
+	// 阈值 139MB；40MB 输入下 full 预计 520MB（明显放不下，直接跳过），
+	// stream+memory 预计 80MB（判「放得下」→ 被选中），实测却是 261MB（ratio 3.3）。
+	hist := []Sample{{Rung: "stream+memory", Size: 40 << 20, Predicted: 80 << 20,
+		Peak: 261 << 20, OK: false, At: time.Now()}}
+	size := uint64(40 << 20)
+
+	before, _ := Choose(ChooseRequest{Size: size, Memory: Memory{Available: 174 << 20}, Candidates: rungs()})
+	if before.Chosen.Name != "stream+memory" {
+		t.Fatalf("没有历史时按估算选中流式内存档：%+v", before.Chosen)
+	}
+
+	after, err := Choose(ChooseRequest{Size: size, Memory: Memory{Available: 174 << 20},
+		Candidates: rungs(), Samples: hist})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Chosen.Name != "stream+disk" {
+		t.Fatalf("历史显示实测超标后应降到磁盘档：%+v（%s）", after.Chosen, after.Reason)
+	}
+	// 被判「放不下」的原因是校准后的估算（80MB × 3.3 ≈ 261MB），不是原始估算
+	var rj *Rejected
+	for i := range after.Rejected {
+		if after.Rejected[i].Name == "stream+memory" {
+			rj = &after.Rejected[i]
+		}
+	}
+	if rj == nil {
+		t.Fatalf("应记录被跳过的流式内存档：%+v", after.Rejected)
+	}
+	if rj.Predicted < 260<<20 {
+		t.Fatalf("校准后的预计峰值应明显高于原始 80MB：%s", HumanSize(rj.Predicted))
+	}
+}
+
+// 校准只用同档样本：磁盘档的 ratio（0.85）不该把内存档的估算改小或改大。
+func TestCalibrationIgnoresOtherRungs(t *testing.T) {
+	hist := []Sample{{Rung: "stream+disk", Predicted: 100, Peak: 85, OK: true, At: time.Now()}}
+	p, _ := Choose(ChooseRequest{Size: 100 << 20, Memory: Memory{Available: 4 << 30},
+		Candidates: rungs(), Samples: hist})
+	if p.Chosen.Name != "full+memory" {
+		t.Fatalf("%+v", p.Chosen)
+	}
+	if p.Calibration != 1 || p.Predicted != p.RawPredicted {
+		t.Fatalf("跨档样本不该参与校准：calib=%.2f n=%d", p.Calibration, p.CalibSamples)
+	}
+}
+
+// 离谱的历史样本不能让估算无限膨胀（否则一档会被永久拉黑）。
+func TestCalibrationIsCapped(t *testing.T) {
+	hist := []Sample{{Rung: "stream+memory", Predicted: 1, Peak: 1000, OK: false, At: time.Now()}}
+	p, _ := Choose(ChooseRequest{Size: 1 << 20, Memory: Memory{Available: 1 << 30},
+		Candidates: rungs(), Samples: hist})
+	if p.Calibration > maxCalibration {
+		t.Fatalf("校准倍数应封顶 %.1f：%.2f", maxCalibration, p.Calibration)
+	}
+}

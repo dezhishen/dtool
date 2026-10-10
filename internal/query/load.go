@@ -76,13 +76,20 @@ type LadderPreview struct {
 }
 
 // RungPreview 是单个执行档的预演数据。
+// RungPreview 是单个执行档的预演数据。Need 是**按历史校准后**的预计峰值；
+// RawNeed 是按倍率直接算出来的值，Calibration 是两者之比（>1 说明这一档历史上
+// 实测超过估算，例如 Windows 小输入在内存档上实测到估算的 3 倍）。
 type RungPreview struct {
-	Name      string  `json:"name"`
-	Note      string  `json:"note"`
-	Need      uint64  `json:"need"`
-	NeedHuman string  `json:"need_human"`
-	Chance    float64 `json:"chance"`
-	Chosen    bool    `json:"chosen"`
+	Name         string  `json:"name"`
+	Note         string  `json:"note"`
+	Need         uint64  `json:"need"`
+	NeedHuman    string  `json:"need_human"`
+	RawNeed      uint64  `json:"raw_need,omitempty"`
+	RawNeedHuman string  `json:"raw_need_human,omitempty"`
+	Calibration  float64 `json:"calibration,omitempty"`
+	CalibSample  int     `json:"calibration_samples,omitempty"`
+	Chance       float64 `json:"chance"`
+	Chosen       bool    `json:"chosen"`
 }
 
 // PreviewPlan 按预算与历史预演整条阶梯（不读文件内容），供 meminfo 使用。

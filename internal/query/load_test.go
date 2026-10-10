@@ -145,3 +145,38 @@ func TestMemPolicyStrictRefuses(t *testing.T) {
 		t.Fatalf("hint 应给出退出口：%q", te.Hint)
 	}
 }
+
+// 上限读不到时（Windows Job 标志位设了、值却是 0）：预算只是「本机空闲内存」，
+// 不能拿它去选峰值比输入大一个数量级的整块解析档——沙箱真限 256MB 而输入 118MB 时，
+// 那一下就是不可恢复的 OOM。操作者显式指定时不干预（他就是要试）。
+func TestUncertainCapDropsFullRung(t *testing.T) {
+	size := uint64(118 << 20)
+	unc := memguard.Memory{Available: 14 << 30, Uncertain: true, Source: "系统可用内存（Job Object 上限读不到，预算不可信）"}
+
+	plan, spec, _, err := choosePlan(Options{}, unc, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "stream+memory" {
+		t.Fatalf("预算不可信时不该选整块解析：%s（%s）", spec.Name, plan.Reason)
+	}
+	if !strings.Contains(plan.Reason, "整块解析") {
+		t.Fatalf("理由要写明为什么排除了整块解析：%q", plan.Reason)
+	}
+
+	// 操作者强制 full 时照办
+	_, spec, _, err = choosePlan(Options{LoadMode: "full"}, unc, size)
+	if err != nil || spec.Mode != LoadFull {
+		t.Fatalf("显式 --load-mode full 应被尊重：%+v %v", spec, err)
+	}
+
+	// 上限可信时（硬上限 256MB）仍按阶梯正常判断
+	known := memguard.Memory{Available: 205 << 20, Hard: true, Source: "Windows Job Object 进程内存上限"}
+	_, spec, _, err = choosePlan(Options{}, known, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Name != "stream+disk" {
+		t.Fatalf("256MB 硬上限 + 118MB 输入应落到磁盘档：%s", spec.Name)
+	}
+}

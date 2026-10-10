@@ -71,11 +71,16 @@ func jobLimit() (JobInfo, uint64, string) {
 	queryOK := r2 != 0
 	var flags uint32
 	var processLimit, jobLimitBytes uint64
+	var peakProcess, peakJob uint64
 	if queryOK {
 		flags = je.BasicLimitInformation.LimitFlags
 		processLimit, jobLimitBytes = uint64(je.ProcessMemoryLimit), uint64(je.JobMemoryLimit)
+		peakProcess, peakJob = uint64(je.PeakProcessMemoryUsed), uint64(je.PeakJobMemoryUsed)
 	}
-	return jobVerdict(inJobR1, errnoCode(errno1), queryOK, errnoCode(errno2), flags, processLimit, jobLimitBytes)
+	ji, limit, src := jobVerdict(inJobR1, errnoCode(errno1), queryOK, errnoCode(errno2),
+		flags, processLimit, jobLimitBytes)
+	ji.PeakProcessMemUsed, ji.PeakJobMemUsed = peakProcess, peakJob
+	return ji, limit, src
 }
 
 // errnoCode 把 syscall 返回的 last error 变成可直接上报的数字；成功时为 0。
@@ -126,9 +131,10 @@ func Detect() Memory {
 		if ji.LimitUnreadable {
 			// 有 Job 的迹象却读不到上限：这台机器的「预算 16GB」是假的，必须说清楚，
 			// 否则预检与看门狗会一起失效，只能等到进程被拒绝分配才暴露。
-			source = "系统可用内存（看起来在 Job Object 里但上限读取失败，详见 dtool meminfo）"
+			// Uncertain 会让选档排除「整块解析」这类峰值比输入大一个数量级的档。
+			source = "系统可用内存（Job Object 上限读不到，预算不可信，详见 dtool meminfo）"
 		}
-		return Memory{Limit: 0, Used: used, Available: sys, Source: source}
+		return Memory{Limit: 0, Used: used, Available: sys, Source: source, Uncertain: ji.LimitUnreadable}
 	}
 	return Memory{Source: "未检测（可用 --max-memory 指定）"}
 }

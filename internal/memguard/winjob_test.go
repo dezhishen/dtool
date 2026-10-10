@@ -151,3 +151,36 @@ func TestJobInfoJSONKeepsRawEvidence(t *testing.T) {
 		}
 	}
 }
+
+// B 变体（harness 置了 0x2000 标志位、值却是 0）暴露的两个 bug：
+// 1) note 说「LimitFlags 既无 0x100 也无 0x2000」，与已读出的 flags=0x2000 自相矛盾；
+// 2) 预算静默回落到系统可用内存（14.5GB），沙箱里的假预算放行了本该受限的输入。
+func TestJobVerdictFlagSetButValueZero(t *testing.T) {
+	info, limit, src := jobVerdict(1, 0, true, 0, jobObjectLimitJobMemory, 0, 0)
+	if limit != 0 || src != "" {
+		t.Fatalf("值读到 0 时不能凭空给上限：%d/%q", limit, src)
+	}
+	if !info.LimitUnreadable {
+		t.Fatal("应标 limit_unreadable：预算不可信，选档与提示都要据此调整")
+	}
+	if strings.Contains(info.Note, "既无 0x100 也无 0x2000") {
+		t.Fatalf("note 不能与 flags 自相矛盾：%q", info.Note)
+	}
+	for _, want := range []string{"JOB_OBJECT_LIMIT_JOB_MEMORY(0x2000)", "值是 0", "--max-memory"} {
+		if !strings.Contains(info.Note, want) {
+			t.Fatalf("note 缺少 %q：%q", want, info.Note)
+		}
+	}
+	if info.LimitFlagsHex != "0x2000" {
+		t.Fatalf("flags 仍要照原样留档：%q", info.LimitFlagsHex)
+	}
+
+	// 真的没设上限时，仍是那句「没有设置内存上限」，且不标 unreadable
+	info2, _, _ := jobVerdict(1, 0, true, 0, 0x40, 0, 0)
+	if info2.LimitUnreadable {
+		t.Fatal("没有任何内存标志位时不该标 unreadable")
+	}
+	if !strings.Contains(info2.Note, "没有设置内存上限") {
+		t.Fatalf("note = %q", info2.Note)
+	}
+}

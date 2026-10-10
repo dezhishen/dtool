@@ -81,6 +81,13 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if mem.Uncertain {
+		// 预算不可信这件事要说两次：一次随结果/日志走，一次直接给用户。
+		fmt.Fprintf(memguard.NoticeWriter,
+			"警告：%s\n预算按本机空闲内存算，若其实受沙箱限制请用 --max-memory 指定上限；\n"+
+				"本次已排除峰值较高的整块解析档，必要时用 --store disk 进一步压低峰值。\n",
+			mem.Source)
+	}
 	memguard.Debugf("%s；数据源 %d 个共 %s；%s", mem.Describe(), len(binds),
 		memguard.HumanSize(total), planNote(plan, plan.Forced))
 
@@ -143,6 +150,22 @@ func choosePlan(o Options, mem memguard.Memory, total uint64) (memguard.Plan, st
 	if err != nil {
 		return memguard.Plan{}, strategy{}, nil, err
 	}
+	// 上限读不到时（Windows Job 标志位设了、值却是 0）：Available 只是「本机空闲内存」，
+	// 不是「允许你用的量」。此时排除峰值比输入大一个数量级的整块解析档——沙箱真限制
+	// 256MB 而输入 118MB 时，整块解析会撞上不可恢复的硬上限。操作者显式指定时不干预。
+	if mem.Uncertain && forced == "" {
+		kept := make([]strategy, 0, len(cands))
+		for _, c := range cands {
+			if c.Mode == LoadFull {
+				memguard.Debugf("上限读不到（%s）：排除 %s", mem.Source, c.Name)
+				continue
+			}
+			kept = append(kept, c)
+		}
+		if len(kept) > 0 {
+			cands = kept
+		}
+	}
 	hist, err := memguard.LoadHistory(o.PlanFile)
 	if err != nil {
 		memguard.Debugf("选档历史读取失败（按无历史处理）：%v", err)
@@ -152,6 +175,10 @@ func choosePlan(o Options, mem memguard.Memory, total uint64) (memguard.Plan, st
 		Size: total, Memory: mem, Candidates: candidateList(cands), Forced: forced,
 		Policy: policyOf(o.MemPolicy), Samples: hist.Samples,
 	})
+	if err == nil && mem.Uncertain && !plan.Forced {
+		plan.Reason = joinReason(plan.Reason,
+			"Job Object 上限读不到（预算按本机空闲内存算，不可信），已排除整块解析档")
+	}
 	if err != nil {
 		return memguard.Plan{}, strategy{}, nil, types.Errorf(types.CodeUsage, "%v", err)
 	}
@@ -485,4 +512,15 @@ func within(p string, roots []string) bool {
 		}
 	}
 	return false
+}
+
+// joinReason 拼接选档理由，空串不加分隔符。
+func joinReason(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "；" + b
 }
