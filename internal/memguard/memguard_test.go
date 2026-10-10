@@ -227,3 +227,21 @@ func TestPickJobLimit(t *testing.T) {
 		}
 	}
 }
+
+// 软上限必须**小于**可用预算：Go 堆只是进程内存的一部分，SQLite 页缓存等堆外
+// 开销同样计入 cgroup / Job Object 的提交量。取满了就等着撞硬上限——Windows 上
+// 那是 runtime 的 fatal error，恢复不了。
+func TestSoftLimitLeavesHeadroomForNonHeap(t *testing.T) {
+	cases := []struct {
+		avail, want uint64
+	}{{0, 0}, {100, 75}, {4000, 3000}}
+	for _, c := range cases {
+		if got := (Memory{Available: c.avail}).SoftLimit(); got != c.want {
+			t.Errorf("SoftLimit(%d) = %d, want %d", c.avail, got, c.want)
+		}
+	}
+	big := Memory{Available: 4 << 30}
+	if big.SoftLimit() >= big.Available {
+		t.Fatal("软上限不得等于可用预算")
+	}
+}

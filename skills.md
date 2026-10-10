@@ -188,10 +188,14 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
 - 排查「预检/看门狗到底在不在工作」：`dtool meminfo [--source alias=文件]`（预算来源、原始探测字段与预检预演）；
   `DTOOL_DEBUG_MEMORY=1` 把每个命令的判定过程打到 stderr（来源、预算、装入方式、预计 need、预检结论、看门狗阈值）。
-- 预算来源随平台不同：Linux 读 cgroup/系统可用内存，Windows 读 **Job Object 进程内存上限**（存在即生效），
+- 预算来源随平台不同：Linux 读 cgroup/系统可用内存，Windows 读 **Job Object 内存上限**
+  （`0x100` 进程级 / `0x2000` job 级，两者都设时取小值；存在即生效），
   其他平台（如 macOS）**不自动探测**——拿不到预算时预检与看门狗都不工作，所以容器/受限环境里请显式给
   `--max-memory`。顶到外部硬上限时可能看到「内存不足：…SQLite 分配失败」（code 4，含 hint），
   极端情况下是 Go 的 `fatal error: out of memory`（不可恢复）——后者只会在没有预算可比对时发生。
+- `dtool meminfo` 的 `warnings` 是结论式的：Windows 上读不到 Job Object 上限时它会说
+  「预算回落到系统可用内存，请用 `--max-memory`」——**看到这句就别相信 `budget` 里的数字**，
+  那只是本机空闲内存，不是沙箱允许你用的量。
 - 性能结论有回归测试（环境/方式/结果见 `docs/PERFORMANCE.md`），随 `go test ./...` 执行：`TestPerfLoadModeMemoryRatio`（流式峰值须低于整块解析 1.3 倍以上）、`TestPerfConvertExcelMemory`（转换峰值不得超过预检倍率）。吞吐用 `make bench` 看，`DTOOL_BENCH_ROWS=N` 放大，`-short` 跳过这些回归。
 
 ## 注意事项

@@ -79,14 +79,15 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 					filepath.Base(binds[i].Path), memguard.HumanSize(mem.Available))
 			}
 		}
-		// 软上限：接近预算时 GC 更积极，尽量不撞上 cgroup 硬限制
+		// 软上限：接近预算时 GC 更积极，尽量不撞上 cgroup / Job Object 硬限制
+		// （堆上限比可用预算更低：堆外的 SQLite 页缓存同样计入提交量，见 SoftLimit）
 		defer debug.SetMemoryLimit(-1)
-		debug.SetMemoryLimit(int64(mem.Available))
+		debug.SetMemoryLimit(int64(mem.SoftLimit()))
 	}
 	ctx, stopWatch := memguard.Watch(ctx, mem.Available)
 	defer stopWatch()
-	memguard.Debugf("看门狗=%s（阈值 %s）；Go 堆软上限=%s", onOff(mem.Available > 0),
-		memguard.HumanSize(mem.Available), onOff(mem.Available > 0))
+	memguard.Debugf("看门狗=%s（阈值 %s）；Go 堆软上限=%s（阈值 %s）", onOff(mem.Available > 0),
+		memguard.HumanSize(mem.Available), onOff(mem.Available > 0), memguard.HumanSize(mem.SoftLimit()))
 
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

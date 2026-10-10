@@ -175,13 +175,23 @@ go test ./internal/query -bench LoadStream -benchmem   # 只看某一项
 - **留余量**：`auto` 只有在整块解析峰值 ≤ 预算 80% 时才选它，否则走流式；显式 `--load-mode full` 且逼近预算时会提前提示；
 - **载入进度**：数据源 ≥8MB 时向 stderr 打印「载入 xx（大小，装入方式，预计需约 xx 内存）...」，即使进程被强杀也能看出卡在哪里。
 
-排查用 `dtool meminfo [--source alias=文件]`（打印预算来源、原始探测字段与预检预演）或
+排查用 `dtool meminfo [--source alias=文件]`（打印预算来源、原始探测字段、预检预演，
+并在探测不可信时给出 `warnings`）或
 `DTOOL_DEBUG_MEMORY=1`（把每个命令的判定过程打到 stderr）。
 
 **探测来源**（决定上面这些预检/看门狗的数字从哪来）：Linux 读 cgroup v2/v1 与系统可用内存；
-Windows 读 **Job Object 的进程内存上限**（`JOB_OBJECT_LIMIT_PROCESS_MEMORY`，CI/沙箱常用）与系统可用内存，
-进程用量按工作集计算；macOS 等平台不做自动探测，请用 `--max-memory` 显式给出——否则预检与看门狗
-都处于关闭状态，只能等外部硬上限把分配打回来。
+Windows 读 **Job Object 的内存上限**（`JOB_OBJECT_LIMIT_PROCESS_MEMORY` 0x100 与
+`JOB_OBJECT_LIMIT_JOB_MEMORY` 0x2000，两者都设时取更小值；CI/沙箱常用）与系统可用内存，
+进程用量按**私有提交量**（commit charge）计算；macOS 等平台不做自动探测，
+请用 `--max-memory` 显式给出——否则预检与看门狗都处于关闭状态，只能等外部硬上限把分配打回来。
+
+读到上限之后还要**真的用上**：Job Object 的读取以 `QueryInformationJobObject` 为准，`IsProcessInJob`
+只作佐证（它返回 0 既可能是「不在 Job 里」也可能是调用失败，当闸门会让探测静默失效）。
+读不到时 `meminfo` 的 `warnings` 会直说「预算回落到系统可用内存，请用 `--max-memory`」，
+不会再安静地按 16GB 继续跑。
+
+Go 堆软上限只取可用预算的 **3/4**：软上限只管 Go 堆，而 SQLite 页缓存是 mmap/VirtualAlloc 出来的、
+同样计入提交量，堆按 100% 走就会把提交顶到硬上限。
 
 ⚠️ 关闭检查（`--max-memory 0`）或平台探测不到上限时，顶到硬上限的失败方式**不可控**：
 可能是可读的结构化错误（`内存不足：…SQLite 分配失败`，code 4，驱动原文 `out of memory (7)`），

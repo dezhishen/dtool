@@ -3,7 +3,6 @@
 package memguard
 
 import (
-	"fmt"
 	"os"
 	"syscall"
 	"unsafe"
@@ -51,39 +50,43 @@ type processMemoryCounters struct {
 }
 
 // jobLimit 读取当前进程所在 Job Object 的上限，并留下**原始证据**（供 meminfo 排查）。
+//
+// 顺序很重要：**先查 Job，再问 IsProcessInJob**。理由见 jobVerdict 的注释——
+// 拿 IsProcessInJob 的返回值当闸门，会把「不在 Job 里」与「调用失败」混为一谈，
+// 代价是整条上限探测链路被静默短路（沙箱里设了 256MB，预算却按 16.9GB 算）。
 func jobLimit() (JobInfo, uint64, string) {
-	var info JobInfo
+	// 伪句柄 -1（GetCurrentProcess）而不是 0：不依赖「NULL 表示当前进程」的约定。
+	h, _ := syscall.GetCurrentProcess()
 	var inJob int32
-	if r, _, _ := procIsProcessInJob.Call(0, 0, uintptr(unsafe.Pointer(&inJob))); r == 0 {
-		info.Note = "IsProcessInJob 调用失败"
-		return info, 0, ""
+	r1, _, errno1 := procIsProcessInJob.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&inJob)))
+	var inJobR1 uint32
+	if r1 != 0 && inJob != 0 {
+		inJobR1 = 1
 	}
-	info.InJob = inJob != 0
-	if !info.InJob {
-		info.Note = "当前进程不在任何 Job Object 里"
-		return info, 0, ""
-	}
+
 	var je jobObjectExtendedLimitInformation
-	r, _, errno := procQueryInformationJobObject.Call(0, jobObjectExtendedLimitInformationClass,
+	r2, _, errno2 := procQueryInformationJobObject.Call(0, jobObjectExtendedLimitInformationClass,
 		uintptr(unsafe.Pointer(&je)), unsafe.Sizeof(je), 0)
-	if r == 0 {
-		if e, ok := errno.(syscall.Errno); ok {
-			info.QueryErr = uint32(e)
-		}
-		info.Note = "QueryInformationJobObject 失败（嵌套 Job 时 hJob=NULL 只给最近一层）"
-		return info, 0, ""
+
+	queryOK := r2 != 0
+	var flags uint32
+	var processLimit, jobLimitBytes uint64
+	if queryOK {
+		flags = je.BasicLimitInformation.LimitFlags
+		processLimit, jobLimitBytes = uint64(je.ProcessMemoryLimit), uint64(je.JobMemoryLimit)
 	}
-	info.QueryOK = true
-	info.LimitFlags = je.BasicLimitInformation.LimitFlags
-	info.LimitFlagsHex = fmt.Sprintf("0x%X", info.LimitFlags)
-	info.ProcessMemLimit = uint64(je.ProcessMemoryLimit)
-	info.JobMemLimit = uint64(je.JobMemoryLimit)
-	limit, src := pickJobLimit(info.LimitFlags, info.ProcessMemLimit, info.JobMemLimit)
-	info.UsedLimit, info.UsedLimitSource = limit, src
-	if limit == 0 {
-		info.Note = "Job 里没有设置内存上限（LimitFlags 里既无 0x100 也无 0x2000）"
+	return jobVerdict(inJobR1, errnoCode(errno1), queryOK, errnoCode(errno2), flags, processLimit, jobLimitBytes)
+}
+
+// errnoCode 把 syscall 返回的 last error 变成可直接上报的数字；成功时为 0。
+func errnoCode(err error) uint32 {
+	if err == nil {
+		return 0
 	}
-	return info, limit, src
+	if e, ok := err.(syscall.Errno); ok {
+		return uint32(e)
+	}
+	return 0
 }
 
 // systemMemory 返回 (物理内存总量, 可用量)；拿不到时返回 0。
@@ -117,7 +120,13 @@ func Detect() Memory {
 		return Memory{Limit: job, Used: used, Available: budgetFrom(job, used, sys), Source: source}
 	}
 	if sys > 0 {
-		return Memory{Limit: 0, Used: used, Available: sys, Source: "系统可用内存"}
+		source := "系统可用内存"
+		if ji.LimitUnreadable {
+			// 有 Job 的迹象却读不到上限：这台机器的「预算 16GB」是假的，必须说清楚，
+			// 否则预检与看门狗会一起失效，只能等到进程被拒绝分配才暴露。
+			source = "系统可用内存（看起来在 Job Object 里但上限读取失败，详见 dtool meminfo）"
+		}
+		return Memory{Limit: 0, Used: used, Available: sys, Source: source}
 	}
 	return Memory{Source: "未检测（可用 --max-memory 指定）"}
 }

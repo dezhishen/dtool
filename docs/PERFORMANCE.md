@@ -188,6 +188,13 @@ need > 可用内存 → 转换/查询前直接以 rc=4 失败并给出数字
   `debug.SetMemoryLimit` 管不到它，只有预检 + 看门狗能提前拦住。
 - Windows 的用量口径是**私有提交量**（commit charge，`GetProcessMemoryInfo` 的 `PagefileUsage`）而不是
   工作集：`JOB_OBJECT_LIMIT_PROCESS_MEMORY` 限的就是提交量，按工作集看会等到提交顶满才报错。
+- Windows 的 Job Object 探测**以 `QueryInformationJobObject` 为准**，`IsProcessInJob` 只做佐证：
+  后者把「不在 Job 里」与「调用失败」都表示成 0，拿它当闸门会让整条上限探测被静默短路
+  （实测：harness 设了 256MB 上限，工具却按 16.9GB 预算跑，5 轮里 2 轮 runtime fatal OOM）。
+  两种标志都认：`JOB_OBJECT_LIMIT_PROCESS_MEMORY`(0x100) 与 `JOB_OBJECT_LIMIT_JOB_MEMORY`(0x2000)，
+  同时设置时取更小的那个。
+- Go 堆软上限取可用预算的 **3/4**（`Memory.SoftLimit`）：软上限只管 Go 堆，SQLite 页缓存等
+  堆外开销同样计入 cgroup / Job Object 的提交量，堆取满就会撞硬上限。
 - 平台探测：Linux 用 cgroup v2/v1 + 系统可用内存；Windows 用 Job Object 进程内存上限 + 系统可用内存；
   其他平台需显式 `--max-memory`。预算为零等于不做检查，此时顶到硬上限的表现可能是结构化错误
   （SQLite `out of memory (7)`，会被翻译成带 hint 的 code 4），也可能是 Go runtime 的
