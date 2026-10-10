@@ -3,6 +3,7 @@ package converter
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,8 @@ import (
 )
 
 type Options struct {
+	// Ctx 用于响应中断（Ctrl+C / SIGTERM）；nil 表示不检查。
+	Ctx         context.Context
 	Input       string
 	Sheet       string
 	OutDir      string
@@ -44,6 +47,13 @@ type Result struct {
 // 全程只驻留「一行 + 每列统计」，峰值内存与行数无关。旧实现把全部单元格、
 // 转置副本、类型化行以及整块序列化的 JSON 同时放在内存里（150k 行实测 1.5GB）。
 func ConvertExcel(o Options) (*Result, error) {
+	ctx := o.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, interruptedErr()
+	}
 	if _, err := os.Stat(o.Input); err != nil {
 		return nil, types.Errorf(types.CodeNotFound, "file not found: %s", o.Input)
 	}
@@ -86,7 +96,7 @@ func ConvertExcel(o Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	headers, stats, records, scanWarns, err := scanRows(f, sheet, out)
+	headers, stats, records, scanWarns, err := scanRows(ctx, f, sheet, out)
 	if err != nil {
 		out.Close()
 		os.Remove(rowsFile)
@@ -113,7 +123,7 @@ func ConvertExcel(o Options) (*Result, error) {
 
 	// 阶段 2：按 Schema 把 JSONL 写成最终 data.json
 	res.DataFile = filepath.Join(o.OutDir, "data.json")
-	if err := writeTypedRows(rowsFile, res.DataFile, headers, schema, o.PreviewRows, &res.Preview); err != nil {
+	if err := writeTypedRows(ctx, rowsFile, res.DataFile, headers, schema, o.PreviewRows, &res.Preview); err != nil {
 		return nil, err
 	}
 
@@ -138,7 +148,16 @@ func ConvertExcel(o Options) (*Result, error) {
 
 // scanRows 逐行读取工作表：首行作为表头，之后每行累积列统计并写入 JSONL。
 // 返回表头、每列统计与数据行数。
-func scanRows(f *excelize.File, sheet string, w io.Writer) ([]string, []*colStat, int, []string, error) {
+// rowsCheckInterval 是转换过程中检查中断的间隔（行）。转换是流式的，检查开销可忽略。
+const rowsCheckInterval = 4096
+
+// interruptedErr 把「转换被信号打断」表达成可读错误：该步未完成、结果未知，重跑即可。
+func interruptedErr() error {
+	return types.Errorf(types.CodeInterrupted, "已中断：Excel 转换未完成（收到 Ctrl+C / SIGTERM）").
+		WithHint("重跑该命令即可；上一次的临时文件已由 staging 目录清理")
+}
+
+func scanRows(ctx context.Context, f *excelize.File, sheet string, w io.Writer) ([]string, []*colStat, int, []string, error) {
 	it, err := f.Rows(sheet)
 	if err != nil {
 		return nil, nil, 0, nil, err
@@ -153,7 +172,12 @@ func scanRows(f *excelize.File, sheet string, w io.Writer) ([]string, []*colStat
 	)
 	bw := bufio.NewWriterSize(w, 1<<20)
 	defer bw.Flush()
-	for it.Next() {
+	for rows := 0; it.Next(); {
+		if rows%rowsCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, 0, nil, interruptedErr()
+			}
+		}
 		cells, err := it.Columns()
 		if err != nil {
 			return nil, nil, 0, nil, err
@@ -169,6 +193,7 @@ func scanRows(f *excelize.File, sheet string, w io.Writer) ([]string, []*colStat
 			}
 			continue
 		}
+		rows++
 		line := make([]string, len(headers))
 		for i := range headers {
 			if i < len(cells) {
@@ -196,7 +221,7 @@ func scanRows(f *excelize.File, sheet string, w io.Writer) ([]string, []*colStat
 
 // writeTypedRows 读回 JSONL，按 Schema 把每行类型化后写成 data.json；
 // 需要预览时保留前 preview 条（类型化记录）。
-func writeTypedRows(rowsFile, dataFile string, headers []string, schema []ColumnSchema, preview int, out *[]types.Row) error {
+func writeTypedRows(ctx context.Context, rowsFile, dataFile string, headers []string, schema []ColumnSchema, preview int, out *[]types.Row) error {
 	in, err := os.Open(rowsFile)
 	if err != nil {
 		return err
@@ -210,7 +235,14 @@ func writeTypedRows(rowsFile, dataFile string, headers []string, schema []Column
 	bw := bufio.NewWriterSize(tmp, 1<<20)
 	br := bufio.NewReaderSize(in, 1<<20)
 	rw := &rowWriter{w: bw}
-	for {
+	for n := 0; ; n++ {
+		if n%rowsCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				_ = tmp.Close()
+				_ = os.Remove(tmp.Name())
+				return interruptedErr()
+			}
+		}
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
 			var cells []string

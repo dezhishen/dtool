@@ -154,6 +154,14 @@ func collect(ctx context.Context, db *sql.DB, sqlText string, max int) (*types.Q
 
 const phaseQuery = "query"
 
+// phaseLabel 把内部阶段名翻成用户看得懂的词。
+func phaseLabel(phase string) string {
+	if phase == "load" {
+		return "载入"
+	}
+	return "查询"
+}
+
 func wrapErr(ctx context.Context, o Options, err error, phase string) error {
 	var te *types.Error
 	switch {
@@ -167,7 +175,11 @@ func wrapErr(ctx context.Context, o Options, err error, phase string) error {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return types.Errorf(types.CodeExec, "query timeout after %s", o.Timeout)
 	case errors.Is(ctx.Err(), context.Canceled):
-		return types.Errorf(types.CodeExec, "query canceled")
+		// 信号（Ctrl+C / SIGTERM）打断：与「跑完但出错」区分开——这步没做完、
+		// 结果未知，重跑即可，不该让调用方去改输入。
+		te := types.Errorf(types.CodeInterrupted, "已中断：%s阶段未完成（收到 Ctrl+C / SIGTERM）", phaseLabel(phase))
+		te.Hint = "重跑该命令即可；数据源与 SQL 本身没有问题"
+		return te
 	}
 	te = types.Errorf(types.CodeExec, "%s", err.Error())
 	if strings.Contains(err.Error(), "no such table") {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dezhishen/dtool/internal/workspace"
+	"github.com/dezhishen/dtool/pkg/types"
 )
 
 // 进程被强杀时来不及写结束状态：只有把结论落盘，读 `.dtool/actions/<id>.json` 的
@@ -32,7 +33,8 @@ func TestReconcilePersistsStale(t *testing.T) {
 	if raw.Status != StatusStale {
 		t.Fatalf("action 文件状态 = %s，应落盘为 stale", raw.Status)
 	}
-	if raw.Error == nil || !strings.Contains(raw.Error.Message, "进程已消失") || raw.Error.Hint == "" {
+	if raw.Error == nil || raw.Error.Code != types.CodeInterrupted ||
+		!strings.Contains(raw.Error.Message, "进程已消失") || raw.Error.Hint == "" {
 		t.Fatalf("stale 缺少可读原因：%+v", raw.Error)
 	}
 	if raw.FinishedAt != nil {

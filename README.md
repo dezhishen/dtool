@@ -132,7 +132,7 @@ JSON → 内存 SQLite 有两种装入方式，`--load-mode` 可选 `auto`（默
 456MB / 500 万行 → 1:31、603MB；1.34GB / 1400 万行 → 3:42、1637MB（需 `--max-memory 0`，
 默认预检会在约 850MB 以上提前拦下）。
 
-流式模式下内存不再随文件线性暴涨，限制主要变成**耗时**。`--timeout` 只约束**查询阶段**（默认 60s）；载入是本地的读写与 CPU 工作，不受它限制，由内存看门狗和 Ctrl+C 兜底。
+流式模式下内存不再随文件线性暴涨，限制主要变成**耗时**。`--timeout` 只约束**查询阶段**（默认 60s）；载入是本地的读写与 CPU 工作，不受它限制，由内存看门狗和 Ctrl+C 兜底——按下 Ctrl+C（或收到 SIGTERM）会立刻停在该步，以 `code: 5`「已中断」退出并留下 `failed` 的 Action（`4` 才是「跑完但出错」，见 [skills.md](skills.md)）。
 
 ```bash
 dtool query --load-mode stream --source d=big.json --sql 'SELECT ...'

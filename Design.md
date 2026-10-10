@@ -216,8 +216,9 @@
 ### 4.4 Action 生命周期
 
 ```
-started ──► running ──► success
-                    └─► failed
+started ──► running ──► success        退出码 0
+                    ├─► failed         退出码 4（执行失败）/ 5（被 Ctrl+C、SIGTERM 中断）
+                    └─► stale          退出码 5：进程被强杀，事后由下一条命令或 actions sync 收敛
 ```
 
 - **started**：命令开始执行时立即写入 Action 文件（`status: "running"`）。
@@ -228,7 +229,12 @@ started ──► running ──► success
   `running` 在 **Action 文件与 `index.json` 上一起落盘为 `stale`**，并补一条可读原因（「进程已消失
   （PID n 不存在），任务被中断，结果未知」）。否则直接读 `.dtool/actions/<id>.json` 的脚本、AI 或
   git diff 看到的仍是 `running`，会误以为任务还在跑。回收是幂等的，只在确有陈旧条目时才写盘。
-- 捕获 SIGINT/SIGTERM，尽力把状态置为 `failed`（`error.code=interrupted`）。
+- 捕获 SIGINT/SIGTERM（`signal.NotifyContext`），把当前步骤以普通错误收尾：状态 `failed`、
+  `error.code=5`（interrupted），消息写明阶段（「已中断：载入阶段未完成（收到 Ctrl+C / SIGTERM）」），
+  并附 `hint`「重跑该命令即可」。转换（`convert`）与 JSON 装入（`query`）都在行循环里检查 ctx，
+  所以 Ctrl+C 立刻生效，不会「按了没反应、等整表转完」。
+- 强杀（SIGKILL / OOM / 断电）无法捕获：状态停在 `running`，由下一次命令或 `actions sync`
+  收敛为 `stale`，`error.code` 同样是 `5`（中断），只是发现得晚。
 
 ### 4.5 Action 索引
 
@@ -323,7 +329,12 @@ dtool visualize --input latest:query --type pie --x region --y total
 | `--max-memory` | 内存预算，如 `4G`/`512M`；`0` 关闭检查（默认自动探测 cgroup v2/v1 与系统可用内存），见 8.4.1 |
 | `-c, --config` | 配置文件，命令行参数优先；严格模式拒绝未知键 |
 
-**退出码与 stdout 约定**：成功退出码 0，stdout 为结构化 JSON；失败退出码非 0（1 通用、2 参数错误、3 引用不存在、4 执行失败），**stdout 仍输出 `ErrorResponse` JSON**，人类可读日志只写 stderr。
+**退出码与 stdout 约定**：成功退出码 0，stdout 为结构化 JSON；失败退出码非 0
+（1 通用、2 参数错误、3 引用不存在、4 执行失败、**5 被中断**），**stdout 仍输出 `ErrorResponse` JSON**，
+人类可读日志只写 stderr。
+
+`4` 与 `5` 的区别是语义而非严重程度：`4` = 跑完了但结果不可用（改输入/参数），
+`5` = 半路没了、结果未知（重跑即可）；强杀后收敛出来的 `stale` 也标 `5`。
 
 ### 5.1 `convert`：Excel → JSON + JSON Schema
 
@@ -1047,7 +1058,9 @@ type ErrorResponse struct {
 - **SQL 语法错误**：返回 SQLite 原始错误 + `hint`，例如 `"hint": "检查表名是否为 JSON 文件路径"`。
 - **图表字段缺失**：返回 `field not found`，并在 Action 的 `error.detail` 中列出可用字段。
 - **崩溃中断**：Action 停留在 `running`；下次任何命令启动时会回收为 `stale`（Action 文件与索引一起落盘，
-  并写明「进程已消失…结果未知」），AI 通过 `actions list --status stale` 可发现并重试。
+  并写明「进程已消失…结果未知」，`error.code=5`），AI 通过 `actions list --status stale` 可发现并重试。
+- **信号中断**：Ctrl+C / SIGTERM 走正常错误路径：`status: failed`、`error.code=5`、消息含阶段
+  （载入 / 查询 / Excel 转换），`hint` 让你直接重跑。
 - **沙箱拒绝**：SQL 访问被禁止的路径时，返回 `sandbox violation` 并说明允许的范围。
 - **超时/超限**：`--timeout` 或 `--max-rows` 触发时返回明确错误码，而不是截断后假装成功。
 - **引用失效**：`action:<id>` 指向不存在的 Action 时，返回 `action not found` 并列出最近可用的 Action ID。

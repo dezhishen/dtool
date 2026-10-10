@@ -50,6 +50,7 @@ dtool 面向 Agent 设计：你只描述**目标和产物**，不必指定命令
 - **口径要落盘**：让 Agent 用 `--tags 月报 --notes "口径：含已退款"` 记录，之后 `actions list` / `trace` 能追溯。
 - **出错就让它自查**：`dtool actions list --status failed --limit 1` → `actions show <id>`，错误里带
   `detail` / `hint`（例如「改用 `--load-mode stream`」「表名请用 `--source` 绑定」）。
+  看 `error.code` 决定下一步：`5` = 被中断（Ctrl+C / 进程被杀）→ 直接重跑；`4` = 执行失败 → 按 hint 改输入。
 - **反复迭代的写法**：「刚才那张图按季度再拆一下」→ Agent 会用 `--from action:<id>` 记录血缘，
   数据源改用 `dataset:` 而不重跑转换。
 

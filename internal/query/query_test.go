@@ -229,12 +229,22 @@ func TestEmptyResultIsNonNil(t *testing.T) {
 	}
 }
 
-func TestCanceledContext(t *testing.T) {
+// 被信号打断（Ctrl+C / SIGTERM）与「跑完但出错」是两种语义：前者结果未知、
+// 重跑即可（code 5），后者要改输入（code 4）。
+func TestCanceledContextIsInterrupted(t *testing.T) {
 	ws, cwd := setup(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Run(ctx, opts(ws, cwd, `SELECT * FROM "local.json"`)); err == nil {
-		t.Fatal("canceled context ignored")
+	_, err := Run(ctx, opts(ws, cwd, `SELECT * FROM "local.json"`))
+	var te *types.Error
+	if err == nil || !errors.As(err, &te) {
+		t.Fatalf("canceled context ignored: %v", err)
+	}
+	if te.Code != types.CodeInterrupted {
+		t.Fatalf("code = %d，应为 CodeInterrupted(%d)", te.Code, types.CodeInterrupted)
+	}
+	if !strings.Contains(te.Message, "已中断") || te.Hint == "" {
+		t.Fatalf("中断错误缺少可读说明：%+v", te)
 	}
 }
 

@@ -2,7 +2,9 @@ package converter
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -239,5 +241,22 @@ func TestMergeCount(t *testing.T) {
 	}
 	if n, err := mergeCount(plain, "Sheet1"); err != nil || n != 0 {
 		t.Fatalf("plain mergeCount = %d, %v", n, err)
+	}
+}
+
+// 转换也要能被打断：Ctrl+C 后不该还把整个大表转完（此前 convert 完全不看 ctx）。
+func TestConvertExcelInterrupted(t *testing.T) {
+	dir := t.TempDir()
+	src := writeTrickyXlsx(t, dir)
+	out := filepath.Join(dir, "out")
+	if err := os.MkdirAll(out, 0o755); err != nil { // 实际调用方是 dataset staging
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ConvertExcel(Options{Ctx: ctx, Input: src, OutDir: out})
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeInterrupted || !strings.Contains(te.Message, "已中断") {
+		t.Fatalf("err = %v，应为 CodeInterrupted", err)
 	}
 }

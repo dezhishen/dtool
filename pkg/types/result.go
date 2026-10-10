@@ -9,11 +9,18 @@ import (
 )
 
 // 退出码约定。
+//
+// CodeInterrupted 与 CodeExec 的区别是语义而非严重程度：
+//   - CodeExec：跑完了但出错（SQL 错、字段缺失、内存不足…）——要改输入或参数再试；
+//   - CodeInterrupted：半路没了、结果未知（Ctrl+C / SIGTERM，或进程被强杀后由
+//     下一次命令 / actions sync 收敛为 stale）——重跑即可。
 const (
 	CodeGeneral  = 1
 	CodeUsage    = 2
 	CodeNotFound = 3
 	CodeExec     = 4
+	// CodeInterrupted 表示被中断：该步未完成，结果未知，可安全重试。
+	CodeInterrupted = 5
 )
 
 // Row 是保持列顺序的一行数据。

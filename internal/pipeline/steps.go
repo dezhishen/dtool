@@ -126,7 +126,7 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 			}
 			defer os.RemoveAll(stage)
 			now := time.Now().UTC().Truncate(time.Second) // 与 Schema 中的秒级 updated_at 保持一致
-			r, err := converter.ConvertExcel(converter.Options{Input: p.Input, Sheet: p.Sheet, OutDir: stage,
+			r, err := converter.ConvertExcel(converter.Options{Ctx: e.Ctx, Input: p.Input, Sheet: p.Sheet, OutDir: stage,
 				UpdatedAt: now, PreviewRows: e.Preview})
 			if err != nil {
 				return nil, err

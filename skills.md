@@ -130,7 +130,8 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 | 直接描述目标与产物（"按区域汇总 `sales.xlsx` 并出柱状图，再给我 Top 5 客户 Excel"） | 别反问命令细节：`convert` 成数据集 → `datasets show` 确认列名 → `query` → `visualize --input latest:query` / `--format xlsx --output`，最后把产物路径报回去 |
 | "进度怎么样 / 刚才做了什么" | `actions list --limit 5`，用 `summary` 回答 |
 | "为什么失败了" | `actions list --status failed --limit 1` → `actions show <id>`，读 `error`（含 `detail`/`hint`）；字段缺失时 `detail` 会列出可用列 |
-| "任务像卡住了 / 进程被杀了" | `actions sync`：把进程已消失的 `running` 落盘为 `stale`（含原因），仍活着的列在 `running` 里；返回 `{"scanned","stale","stale_ids","running"}` |
+| "任务像卡住了 / 进程被杀了" | `actions sync`：把进程已消失的 `running` 落盘为 `stale`（含原因，`error.code=5`），仍活着的列在 `running` 里；返回 `{"scanned","stale","stale_ids","running"}` |
+| "刚才我按了 Ctrl+C，那次算失败吗" | `actions list --status failed --limit 1` → 看 `error.code`：`5` = 被中断（重跑即可），`4` = 执行失败（要改输入） |
 | "用上次的结果画图/导出" | `visualize --input latest:query ...`，不要重跑查询 |
 | "按季度再拆一下" | 新 `query`，带 `--from action:<上次id>`（血缘），数据源用 `dataset:` 或 `--source` |
 | "标记这个口径含税" | `actions annotate <id> --text "口径：含税" --by ai-agent` |
@@ -139,7 +140,21 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 
 ## 错误与退出码
 
-stdout 错误 JSON：`{"error","detail","hint","code","action_id"}`。退出码：`1` 通用，`2` 参数/用法错误，`3` 引用/文件不存在，`4` 执行失败。失败的步骤也会留下 `status: failed` 的 Action，可据此续写，无需从头来。`pipeline` 失败时 `detail` 指明失败的子步骤。
+stdout 错误 JSON：`{"error","detail","hint","code","action_id"}`。退出码：
+
+| code | 含义 | 该怎么办 |
+|------|------|----------|
+| `1` | 通用错误 | 看 `error` / `detail` |
+| `2` | 参数 / 用法错误 | 改参数 |
+| `3` | 引用或文件不存在 | 先 `datasets list` / 检查路径 |
+| `4` | 执行失败（跑完了但出错：SQL 错、字段缺失、内存不足、超时…） | 按 `hint` 改输入或参数 |
+| `5` | **被中断**（Ctrl+C / SIGTERM；或进程被强杀后收敛为 `stale`）——该步未完成、结果未知 | 直接重跑，数据与 SQL 本身没问题 |
+
+**别把 4 和 5 混起来**：`4` 是「跑完了但结果不可用」，要改东西；`5` 是「半路没了」，
+重跑即可——所以 AI 不该为 `5` 去猜 SQL 哪里写错了。
+
+失败的步骤都会留下 `status: failed` 的 Action（`5` 亦然，`error.code=5`），可据此续写，
+无需从头来；进程被强杀时来不及写，见 `actions sync`。`pipeline` 失败时 `detail` 指明失败的子步骤。
 
 ## 图表与中文
 

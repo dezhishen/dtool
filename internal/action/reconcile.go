@@ -78,7 +78,7 @@ func markStale(a *Action) {
 	a.Status = StatusStale
 	if a.Error == nil {
 		a.Error = &Error{
-			Code:    types.CodeExec,
+			Code:    types.CodeInterrupted,
 			Message: fmt.Sprintf("进程已消失（PID %d 不存在），任务被中断，结果未知", a.Pid),
 			Detail:  "常见原因：被 OOM 杀、被 kill -9、机器重启或断电——中断前没有机会写结束状态；结束时间未知",
 			Hint:    "重跑该命令即可；若是内存不足，缩小输入或放宽预算（--max-memory / --load-mode stream）",
