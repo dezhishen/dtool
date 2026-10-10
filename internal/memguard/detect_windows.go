@@ -24,40 +24,6 @@ var (
 	procGetProcessMemoryInfo      = psapi.NewProc("GetProcessMemoryInfo")
 )
 
-const (
-	jobObjectExtendedLimitInformation = 9
-	jobObjectLimitProcessMemory       = 0x100
-)
-
-type ioCounters struct {
-	ReadOperationCount  uint64
-	WriteOperationCount uint64
-	OtherOperationCount uint64
-	ReadTransferCount   uint64
-	WriteTransferCount  uint64
-}
-
-type jobObjectBasicLimitInformation struct {
-	PerProcessUserTimeLimit int64
-	PerJobUserTimeLimit     int64
-	LimitFlags              uint32
-	MinimumWorkingSetSize   uintptr
-	MaximumWorkingSetSize   uintptr
-	ActiveProcessLimit      uint32
-	Affinity                uintptr
-	PriorityClass           uint32
-	SchedulingClass         uint32
-}
-
-type jobObjectExtendedLimitInformationStruct struct {
-	BasicLimitInformation jobObjectBasicLimitInformation
-	IoInfo                ioCounters
-	ProcessMemoryLimit    uintptr
-	JobMemoryLimit        uintptr
-	PeakProcessMemoryUsed uintptr
-	PeakJobMemoryUsed     uintptr
-}
-
 type memoryStatusEx struct {
 	Length               uint32
 	MemoryLoad           uint32
@@ -89,8 +55,8 @@ func jobProcessMemoryLimit() (uint64, bool) {
 	if r, _, _ := procIsProcessInJob.Call(0, 0, uintptr(unsafe.Pointer(&inJob))); r == 0 || inJob == 0 {
 		return 0, false
 	}
-	var info jobObjectExtendedLimitInformationStruct
-	r, _, _ := procQueryInformationJobObject.Call(0, jobObjectExtendedLimitInformation,
+	var info jobObjectExtendedLimitInformation
+	r, _, _ := procQueryInformationJobObject.Call(0, jobObjectExtendedLimitInformationClass,
 		uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info), 0)
 	if r == 0 || info.BasicLimitInformation.LimitFlags&jobObjectLimitProcessMemory == 0 {
 		return 0, false
@@ -98,14 +64,14 @@ func jobProcessMemoryLimit() (uint64, bool) {
 	return uint64(info.ProcessMemoryLimit), true
 }
 
-// systemAvailable 返回系统可用物理内存；拿不到时返回 0。
-func systemAvailable() uint64 {
+// systemMemory 返回 (物理内存总量, 可用量)；拿不到时返回 0。
+func systemMemory() (total, avail uint64) {
 	var st memoryStatusEx
 	st.Length = uint32(unsafe.Sizeof(st))
 	if r, _, _ := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&st))); r == 0 {
-		return 0
+		return 0, 0
 	}
-	return st.AvailPhys
+	return st.TotalPhys, st.AvailPhys
 }
 
 // Detect 依次看 DTOOL_MAX_MEMORY、Job Object 上限、系统可用内存。
@@ -115,9 +81,11 @@ func Detect() Memory {
 			return Memory{Limit: n, Available: n, Source: "环境变量 DTOOL_MAX_MEMORY"}
 		}
 	}
-	sys := systemAvailable()
+	total, sys := systemMemory()
 	used := CurrentUsage()
-	if job, ok := jobProcessMemoryLimit(); ok && job > 0 {
+	// 上限大于物理内存说明读到的是垃圾（例如结构体布局错位）：宁可退回系统可用内存，
+	// 也不要拿一个荒谬的数字让预检形同虚设。
+	if job, ok := jobProcessMemoryLimit(); ok && job > 0 && (total == 0 || job <= total) {
 		return Memory{Limit: job, Used: used, Available: budgetFrom(job, used, sys),
 			Source: "Windows Job Object 进程内存上限"}
 	}
@@ -127,8 +95,11 @@ func Detect() Memory {
 	return Memory{Source: "未检测（可用 --max-memory 指定）"}
 }
 
-// CurrentUsage 返回本进程的工作集（RSS 口径，含非 Go 堆的分配：modernc 的 SQLite
-// 页缓存是 mmap 出来的，不计入 Go heap，必须按工作集看）。
+// CurrentUsage 返回本进程的私有提交量（commit charge）。
+//
+// 用提交量而不是工作集，是因为 JOB_OBJECT_LIMIT_PROCESS_MEMORY 本身就是**提交上限**：
+// 提交会先于工作集触顶（换出的页仍算提交、mmap 出来的 SQLite 页缓存也不在 Go 堆里），
+// 按工作集看会眼睁睁看着提交顶到上限才报错。
 func CurrentUsage() uint64 {
 	h, _ := syscall.GetCurrentProcess()
 	var pmc processMemoryCounters
@@ -137,5 +108,5 @@ func CurrentUsage() uint64 {
 		uintptr(unsafe.Pointer(&pmc)), unsafe.Sizeof(pmc)); r == 0 {
 		return RuntimeUsage()
 	}
-	return uint64(pmc.WorkingSetSize)
+	return uint64(pmc.PagefileUsage)
 }
