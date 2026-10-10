@@ -45,7 +45,10 @@ v0.2.0 及以前的归档里它叫 `skills.md`，`dtool upgrade --skills` 两种
 
 ```bash
 # Linux / macOS（以 linux-amd64 为例，macOS 换成 darwin_amd64 或 darwin_arm64）
-V=v0.2.2                                              # 最新版本；预览版形如 v0.3.0-preview.1
+# 最新正式版（要预览版就把 latest 换成 .../releases 列表第一项；要指定版本就写 V=v1.2.3）
+V=$(curl -sSL https://api.github.com/repos/dezhishen/dtool/releases/latest \
+  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+[ -n "$V" ] || { echo "取最新版本失败：手动指定 V=vX.Y.Z 后重试" >&2; exit 1; }
 base=https://github.com/dezhishen/dtool/releases/download/$V
 curl -LO "$base/dtool_${V#v}_linux_amd64.tar.gz"
 curl -LO "$base/checksums.txt"
@@ -57,7 +60,8 @@ dtool version                                         # 确认可用
 
 ```powershell
 # Windows（PowerShell）
-$V = "v0.2.2"                                        # 最新版本
+# 最新正式版（API 取不到时手动指定 $V = "v1.2.3"）
+$V = (Invoke-RestMethod https://api.github.com/repos/dezhishen/dtool/releases/latest).tag_name
 $base = "https://github.com/dezhishen/dtool/releases/download/$V"
 Invoke-WebRequest "$base/dtool_$($V.TrimStart('v'))_windows_amd64.zip" -OutFile dtool.zip
 Invoke-WebRequest "$base/checksums.txt" -OutFile checksums.txt
@@ -65,7 +69,7 @@ Expand-Archive dtool.zip -DestinationPath .
 .\dtool.exe version                                   # 确认可用
 ```
 
-不想每次手改版本号时，可从 `https://api.github.com/repos/dezhishen/dtool/releases/latest` 取 `tag_name`（只含正式版；要预览版就换成 `.../releases` 列表的第一项）。
+上面用的是 `releases/latest` 的 `tag_name`，**不需要手改版本号**（只含正式版；要预览版就换成 `.../releases` 列表第一项）。API 有速率限制或不可达时，手写一个 `V=v1.2.3` 再跑即可。
 
 请装到**有写权限**的目录：`dtool --update [--pre]` 检查新版本、`dtool upgrade [--pre]` 会替换自身（详见下文）。
 

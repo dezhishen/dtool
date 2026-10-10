@@ -17,9 +17,10 @@ description: 本地数据 Pipeline CLI。用于把 Excel 转成可复用的数�
 | Windows | `dtool_<版本>_windows_<arch>.zip`（内含 `dtool.exe`） |
 
 ```bash
-V=v0.2.2                                             # 最新版本；预览版形如 v0.3.0-preview.1
-# 自动取最新正式版：V=$(curl -sSL https://api.github.com/repos/dezhishen/dtool/releases/latest \
-#   | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)   # 含预览版用 /releases（列表第一项）
+# 最新正式版：不需要手改版本号；预览版把 latest 换成 /releases 列表第一项，指定版本写 V=v1.2.3
+V=$(curl -sSL https://api.github.com/repos/dezhishen/dtool/releases/latest \
+  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+[ -n "$V" ] || { echo "取最新版本失败：手动指定 V=vX.Y.Z 后重试" >&2; exit 1; }
 base=https://github.com/dezhishen/dtool/releases/download/$V
 curl -LO "$base/dtool_${V#v}_linux_amd64.tar.gz" && curl -LO "$base/checksums.txt"
 sha256sum -c --ignore-missing checksums.txt          # macOS 用 shasum -a 256 -c
