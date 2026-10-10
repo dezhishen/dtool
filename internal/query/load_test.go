@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dezhishen/dtool/internal/memguard"
 	"github.com/dezhishen/dtool/pkg/types"
@@ -178,5 +179,48 @@ func TestUncertainCapDropsFullRung(t *testing.T) {
 	}
 	if spec.Name != "stream+disk" {
 		t.Fatalf("256MB 硬上限 + 118MB 输入应落到磁盘档：%s", spec.Name)
+	}
+}
+
+// 临时表必须落盘：temp_store=MEMORY 会把 GROUP BY 的排序器留在内存里（实测聚合段
+// +42MB vs +5MB），磁盘库省下的加载内存会被它原样吃回去——用户 Windows 实测正是
+// 这样表现为「disk 档不降峰值」。
+func TestStoreDSNUsesDiskTempStore(t *testing.T) {
+	disk := storeDSN(StoreDisk, "/tmp/x.db")
+	for _, want := range []string{"temp_store(FILE)", "journal_mode(OFF)", "synchronous(OFF)", "cache_size(-8000)"} {
+		if !strings.Contains(disk, want) {
+			t.Fatalf("磁盘库 DSN 缺少 %s：%s", want, disk)
+		}
+	}
+	if strings.Contains(disk, "temp_store(MEMORY)") {
+		t.Fatalf("磁盘库不得把临时表放内存：%s", disk)
+	}
+	if mem := storeDSN(StoreMemory, ""); !strings.Contains(mem, "temp_store(FILE)") {
+		t.Fatalf("内存库也要显式落盘临时表：%s", mem)
+	}
+	if got := storeDSN(StoreMemory, ""); !strings.HasPrefix(got, ":memory:") {
+		t.Fatalf("内存库 DSN = %q", got)
+	}
+}
+
+// 硬上限下采样更密：越界即不可恢复，采样慢半拍就是白丢一次机会（用户实测中止点比
+// 阈值高 ~15MB，一半来自采样窗口）。软预算维持默认间隔以省 CPU。
+func HardWatchIntervalForTest() time.Duration { return memguard.HardWatchInterval() }
+
+func TestHardCapSamplesMoreOften(t *testing.T) {
+	if HardWatchIntervalForTest() >= memguard.WatchInterval {
+		t.Fatalf("硬上限采样间隔应小于默认值：%s vs %s", HardWatchIntervalForTest(), memguard.WatchInterval)
+	}
+	old := memguard.WatchInterval
+	defer func() { memguard.WatchInterval = old }()
+
+	memguard.WatchInterval = 200 * time.Millisecond
+	if got := HardWatchIntervalForTest(); got != 100*time.Millisecond {
+		t.Fatalf("应为默认间隔的一半：%s", got)
+	}
+	// 下限保护：间隔再小也不低于 20ms，避免空转烧 CPU
+	memguard.WatchInterval = 10 * time.Millisecond
+	if got := HardWatchIntervalForTest(); got != 20*time.Millisecond {
+		t.Fatalf("低于下限时应保持 20ms：%s", got)
 	}
 }

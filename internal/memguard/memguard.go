@@ -26,8 +26,19 @@ const (
 // ErrPressure 由看门狗触发，经 context.Cause 传回。
 var ErrPressure = errors.New("memory pressure")
 
-// WatchInterval 可在测试中调整。
+// WatchInterval 是看门狗默认采样间隔，可在测试中调整。
 var WatchInterval = 200 * time.Millisecond
+
+// HardWatchInterval 是**硬上限**（cgroup / Job Object）下的采样间隔：超了不可恢复，
+// 采样慢半拍就是白丢一次机会——用户实测里中止点比阈值高 ~15MB，其中约一半来自
+// 200ms 窗口内累积的提交量。软预算超了只是普通错误，维持默认间隔以省 CPU。
+func HardWatchInterval() time.Duration {
+	d := WatchInterval / 2
+	if d < 20*time.Millisecond {
+		d = 20 * time.Millisecond
+	}
+	return d
+}
 
 // Describe 返回一行人类可读的预算描述（排查用）。
 func (m Memory) Describe() string {
@@ -194,15 +205,23 @@ func CheckNeed(label string, size, need uint64, how string, mem Memory, hint str
 // Watch 监控本进程内存用量，超过 limit 即取消 ctx，使加载/查询以普通错误退出。
 // limit 为 0 时不监控。返回的 stop 必须调用。
 func Watch(ctx context.Context, limit uint64) (context.Context, func()) {
+	return WatchEvery(ctx, limit, WatchInterval)
+}
+
+// WatchEvery 与 Watch 相同，但可以指定采样间隔（硬上限下用更密的间隔，见 hardWatchInterval）。
+func WatchEvery(ctx context.Context, limit uint64, interval time.Duration) (context.Context, func()) {
 	if limit == 0 {
 		return ctx, func() {}
+	}
+	if interval <= 0 {
+		interval = WatchInterval
 	}
 	cctx, cancel := context.WithCancelCause(ctx)
 	var once sync.Once
 	done := make(chan struct{})
 	stop := func() { once.Do(func() { close(done) }) }
 	go func() {
-		t := time.NewTicker(WatchInterval)
+		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
 			select {

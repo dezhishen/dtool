@@ -220,6 +220,28 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
   那只是本机空闲内存，不是沙箱允许你用的量。
 - 性能结论有回归测试（环境/方式/结果见 `docs/PERFORMANCE.md`），随 `go test ./...` 执行：`TestPerfLoadModeMemoryRatio`（流式峰值须低于整块解析 1.3 倍以上）、`TestPerfConvertExcelMemory`（转换峰值不得超过预检倍率）。吞吐用 `make bench` 看，`DTOOL_BENCH_ROWS=N` 放大，`-short` 跳过这些回归。
 
+## Windows 受限环境回归（方法库）
+
+harness 若用 `CreateJobObjectW` + `AssignProcessToJobObject` 做沙箱，先记住这几条**实测结论**（Windows 10 19044）：
+
+- **单核亲和是最强干扰变量**：`SetProcessAffinityMask(0x1)` 会让同一个用例的峰值成倍上涨
+  （12MB 输入实测 77MB → 156MB 量级）。核数必须作为独立变量记录，别把单核结论当默认结论。
+- **`JOB_OBJECT_LIMIT_JOB_MEMORY`(0x2000) 在 Win10 19044 上不生效**：`SetInformationJobObject`
+  返回成功，但 `QueryInformationJobObject` 读回 `JobMemoryLimit=0`，子进程能超出限制运行。
+  所以 dtool 读到 `limit_unreadable`（标志位设了、值是 0）**是正确行为**：预算回退系统可用内存、
+  明确告警、并排除整块解析档。用例只应断言这条回退路径，不要断言能读到非零上限。
+- **进程级 `0x100` 有效**：能设也能读回，是驱动预算与看门狗的那条路径。
+- **看门狗中止点比阈值高 10~15MB**：采样窗口（硬上限下 100ms）内提交量还在涨，这是固有滞后，
+  不是 bug；阈值 = 硬上限 × 0.85（余量）× 0.8（硬上限折扣）。
+- **结构体要对齐**：`JOBOBJECT_EXTENDED_LIMIT_INFORMATION` x64 下 sizeof=144，
+  `ProcessMemoryLimit@112`、`JobMemoryLimit@120`、`PeakProcessMemoryUsed@128`、`PeakJobMemoryUsed@136`；
+  `SetInformationJobObject` 的信息类必须与结构匹配（class 9 用 Extended、class 2 用 Basic，
+  混用报 `ERROR_BAD_LENGTH(24)`）。建议 harness 里加 sizeof/offset 自检。
+- **`--store disk` 在 Windows 曾经不降峰值**：根因是磁盘档写死了 `temp_store(MEMORY)`，
+  `GROUP BY` 的排序器留在内存里（聚合段 +42MB）。已修为 `temp_store(FILE)`，请复测。
+- **`meminfo` 的预演与 `query` 的实际执行共用同一套选档逻辑**（含「上限不可信排除整块解析档」），
+  两者应始终一致；不一致就是 bug。
+
 ## 注意事项
 
 - **先看 Schema 再写 SQL**：`datasets show <name>` 的 `enum` 给出取值空间，`type` 给出列类型，`nullable` 提示是否要处理 NULL。

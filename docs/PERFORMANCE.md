@@ -257,3 +257,29 @@ need > 可用内存 → 转换/查询前直接以 rc=4 失败并给出数字
    | 有一条失败样本 | `stream+disk`（内存档校准后 184MB > 阈值 148MB） | **第二次就收敛** |
 
    没有这一步，试错不收敛：判「放得下」的档会反复被选中，每次都白撞一次看门狗。
+
+### 聚合段：临时表落盘（temp_store）
+
+装载只是峰值的一半——`GROUP BY` / `ORDER BY` 在没有索引时**要先排序**，而
+`PRAGMA temp_store=MEMORY` 会把整个排序器塞进内存。1 核 + cgroup、123MB / 70 万行、
+`GROUP BY <高基数列>` 实测：
+
+| DSN | 加载段峰值 | 总峰值 | 聚合段增量 |
+|---|---|---|---|
+| 内存库（默认 temp_store） | 177MB | 182MB | 5MB |
+| 内存库 + `temp_store(MEMORY)` | 177MB | 219MB | **42MB** |
+| 磁盘库 + `temp_store(MEMORY)` ← 早期实现 | 33MB | 75MB | **42MB** |
+| 磁盘库 + `temp_store(FILE)` ← 现行 | 33MB | **52MB** | 20MB |
+
+结论：磁盘库省下的加载内存会被 `temp_store(MEMORY)` 原样吃回去——这正是 Windows 上
+「`--store disk` 不降峰值」现象的来源（不是磁盘库没用，是排序器在内存里顶着）。
+现行实现里内存库与磁盘库都显式 `temp_store(FILE)`，耗时不变（1.79s vs 1.79s）。
+
+端到端复验（1 核 / 256MB / 123MB / `GROUP BY` 高基数列）：`--store disk` **rc=0、峰值
+51MB**；`--store memory` 在 172MB（阈值 171MB）优雅中止（`rc=4`）。
+
+### 看门狗采样间隔
+
+中止点总是略高于阈值：200ms 采样窗口里提交量还在涨。**硬上限**下（越界即不可恢复）
+采样间隔减半到 100ms（`memguard.HardWatchInterval`）；软预算维持 200ms 以省 CPU。
+Windows 实测的「阈值 139MB、中止点 153~156MB」里，约一半是这个窗口造成的。

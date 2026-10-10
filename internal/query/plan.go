@@ -141,14 +141,25 @@ func candidateList(ss []strategy) []memguard.Candidate {
 	return out
 }
 
-// storeDSN 生成连接串。磁盘库关掉 journal/sync 并只用内存做临时表：装载是「一次性
-// 写入、随后只读」，掉电丢失无所谓，省下的 fsync 直接换成时间。
+// storeDSN 生成连接串。
+//
+// 两处 pragma 都是有来历的（1 核 + cgroup，123MB / 70 万行，`GROUP BY <高基数列>`）：
+//
+//	journal_mode(OFF)+synchronous(OFF)  磁盘库是一次性产物，掉电丢失无所谓，省掉 fsync
+//	temp_store(FILE)                   **临时表必须落盘**：GROUP BY/ORDER BY 在没有索引时
+//	                                   要先排序，temp_store=MEMORY 会把排序器整个塞进内存
+//	                                   ——实测聚合段从 +5MB 涨到 +42MB，而磁盘库的加载段
+//	                                   本来只有 33MB，等于白省；改成 FILE 后总峰值
+//	                                   75MB → 52MB，耗时不变（1.78s vs 1.79s）。
+//	                                   这一条同时解释了 Windows 上「disk 档不降峰值」：
+//	                                   不是磁盘库没用，是排序器在内存里顶着。
+//	cache_size(-8000)                 页缓存 8MB（磁盘库），配合落盘的临时表把提交量压低
 func storeDSN(st Store, dbPath string) string {
 	if st == StoreDisk {
 		return "file:" + filepath.ToSlash(dbPath) +
-			"?_pragma=journal_mode(OFF)&_pragma=synchronous(OFF)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-8000)"
+			"?_pragma=journal_mode(OFF)&_pragma=synchronous(OFF)&_pragma=temp_store(FILE)&_pragma=cache_size(-8000)"
 	}
-	return ":memory:"
+	return ":memory:?_pragma=temp_store(FILE)"
 }
 
 // openStore 打开装载用的数据库。磁盘库返回清理函数（关闭并删除临时文件）：
@@ -220,6 +231,8 @@ func previewPlan(loadMode, store, memPolicy string, mem memguard.Memory, planFil
 		total += sizeOf[a]
 	}
 
+	cands, excluded := planCandidates(cands, mem, forced)
+
 	hist, err := memguard.LoadHistory(planFile)
 	if err != nil {
 		hist = &memguard.History{}
@@ -233,6 +246,9 @@ func previewPlan(loadMode, store, memPolicy string, mem memguard.Memory, planFil
 	}
 	spec := strategyByName(plan.Chosen.Name)
 
+	if excluded != "" && !plan.Forced {
+		plan.Reason = joinReason(plan.Reason, excluded)
+	}
 	out := LadderPreview{
 		Chosen: spec.Name, Reason: plan.Reason, Chance: plan.Chance,
 		Predicted: plan.Predicted, Threshold: plan.Threshold, Risky: plan.Risky, Forced: plan.Forced,
@@ -283,4 +299,30 @@ func modeNote(m LoadMode) string {
 		return "流式解析"
 	}
 	return "整块解析"
+}
+
+// planCandidates 返回实际参与选档的档位，并给出被排除的原因。
+//
+// 之所以要抽出来给两条路径共用：`query` 与 `meminfo` 各写一份排除逻辑，就出现
+// 「meminfo 预演说会选 full+memory，实际 query 却用 stream+memory」这种自相矛盾——
+// 预演存在的意义就是回答「这条命令会怎么跑」，它必须和真实执行用同一套判断。
+func planCandidates(cands []strategy, mem memguard.Memory, forced string) ([]strategy, string) {
+	if !mem.Uncertain || forced != "" {
+		return cands, ""
+	}
+	// 上限读不到时（Windows Job 标志位设了、值却是 0）：Available 只是「本机空闲内存」，
+	// 不是「允许你用的量」。排除峰值比输入大一个数量级的整块解析档——沙箱真限制 256MB
+	// 而输入 118MB 时，整块解析会撞上不可恢复的硬上限。操作者显式指定时不干预。
+	kept := make([]strategy, 0, len(cands))
+	for _, c := range cands {
+		if c.Mode == LoadFull {
+			memguard.Debugf("上限读不到（%s）：排除 %s", mem.Source, c.Name)
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if len(kept) == 0 {
+		return cands, ""
+	}
+	return kept, "Job Object 上限读不到（预算按本机空闲内存算，不可信），已排除整块解析档"
 }

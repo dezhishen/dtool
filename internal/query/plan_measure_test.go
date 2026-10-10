@@ -134,3 +134,57 @@ func vmHWM() uint64 {
 }
 
 func humanMB(n uint64) string { return fmt.Sprintf("%.0fMB", float64(n)/(1<<20)) }
+
+// 聚合段测量：加载之后还要跑 GROUP BY，SQLite 的排序/临时表会再吃一块内存。
+// 用户 Windows 实测里 118MB 输入「加载段 84MB 可控，聚合段涨到 139~141MB 撞墙」——
+// 所以峰值不能只看装载，聚合段才是那条命令的墙。
+//
+//	DTOOL_MEASURE_JSON=/tmp/big.json DTOOL_AGG_DSN='file:...?_pragma=temp_store(FILE)' \
+//	  go test ./internal/query -run TestMeasureAggregate -v
+func TestMeasureAggregate(t *testing.T) {
+	path := os.Getenv("DTOOL_MEASURE_JSON")
+	if path == "" {
+		t.Skip("设置 DTOOL_MEASURE_JSON 后运行")
+	}
+	dsn := os.Getenv("DTOOL_AGG_DSN")
+	if dsn == "" {
+		dsn = ":memory:"
+	}
+	st, _ := os.Stat(path)
+	size := uint64(st.Size())
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	ctx := context.Background()
+	if err := loadTable(ctx, db, Binding{Name: "data", Path: path}, LoadStream); err != nil {
+		t.Fatal(err)
+	}
+	afterLoad := vmHWM()
+	start := time.Now()
+	sqlText := os.Getenv("DTOOL_AGG_SQL")
+	if sqlText == "" {
+		// 默认查一个**高基数**分组键：SQLite 没有索引时 GROUP BY 要先排序，
+		// 这正是用户 Windows 实测里「聚合段涨 55MB」的来源（低基数分组测不出来）。
+		sqlText = `SELECT path, COUNT(*) AS c, AVG(rt_ms) AS a FROM data GROUP BY path ORDER BY c DESC`
+	}
+	rs, err := db.QueryContext(ctx, sqlText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for rs.Next() {
+		n++
+	}
+	if err := rs.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rs.Close()
+	peak := vmHWM()
+	t.Logf("AGG dsn=%s input=%s load_peak=%s total_peak=%s aggregate_delta=%s groups=%d query=%s",
+		dsn, humanMB(size), humanMB(afterLoad), humanMB(peak),
+		humanMB(peak-afterLoad), n, time.Since(start).Round(time.Millisecond))
+}

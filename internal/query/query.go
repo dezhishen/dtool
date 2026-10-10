@@ -49,7 +49,8 @@ var errMaxRows = errors.New("max rows exceeded")
 const (
 	fullPeakFactor   = 13
 	streamPeakFactor = 2
-	diskPeakFactor   = 0.3
+	// 实测：加载 0.27×（33MB/123MB）+ 聚合段 0.15×（20MB，临时表落盘后）
+	diskPeakFactor = 0.5
 	// autoStreamSize：体积达到该值时，即使预算够也不选整块解析（100MB 级输入
 	// 整块解析要 1.3GB 峰值，留那么大余量没有意义，不如稳定走流式）。
 	autoStreamSize = 32 << 20
@@ -97,10 +98,16 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 		defer debug.SetMemoryLimit(-1)
 		debug.SetMemoryLimit(int64(mem.SoftLimit()))
 	}
-	ctx, stopWatch := memguard.Watch(ctx, mem.Threshold())
+	// 硬上限下一旦越界就是不可恢复的（runtime fatal / OOM-kill），采样更密一点：
+	// 实测中止点比阈值高的那截，主要就是采样窗口里累积起来的。
+	interval := memguard.WatchInterval
+	if mem.Hard {
+		interval = memguard.HardWatchInterval()
+	}
+	ctx, stopWatch := memguard.WatchEvery(ctx, mem.Threshold(), interval)
 	defer stopWatch()
-	memguard.Debugf("看门狗=%s（阈值 %s）；Go 堆软上限=%s（阈值 %s）", onOff(mem.Threshold() > 0),
-		memguard.HumanSize(mem.Threshold()), onOff(mem.Threshold() > 0), memguard.HumanSize(mem.SoftLimit()))
+	memguard.Debugf("看门狗=%s（阈值 %s，采样 %s）；Go 堆软上限=%s（阈值 %s）", onOff(mem.Threshold() > 0),
+		memguard.HumanSize(mem.Threshold()), interval, onOff(mem.Threshold() > 0), memguard.HumanSize(mem.SoftLimit()))
 
 	db, closeStore, err := openStore(ctx, spec.Store)
 	if err != nil {
@@ -150,22 +157,7 @@ func choosePlan(o Options, mem memguard.Memory, total uint64) (memguard.Plan, st
 	if err != nil {
 		return memguard.Plan{}, strategy{}, nil, err
 	}
-	// 上限读不到时（Windows Job 标志位设了、值却是 0）：Available 只是「本机空闲内存」，
-	// 不是「允许你用的量」。此时排除峰值比输入大一个数量级的整块解析档——沙箱真限制
-	// 256MB 而输入 118MB 时，整块解析会撞上不可恢复的硬上限。操作者显式指定时不干预。
-	if mem.Uncertain && forced == "" {
-		kept := make([]strategy, 0, len(cands))
-		for _, c := range cands {
-			if c.Mode == LoadFull {
-				memguard.Debugf("上限读不到（%s）：排除 %s", mem.Source, c.Name)
-				continue
-			}
-			kept = append(kept, c)
-		}
-		if len(kept) > 0 {
-			cands = kept
-		}
-	}
+	cands, excluded := planCandidates(cands, mem, forced)
 	hist, err := memguard.LoadHistory(o.PlanFile)
 	if err != nil {
 		memguard.Debugf("选档历史读取失败（按无历史处理）：%v", err)
@@ -175,9 +167,8 @@ func choosePlan(o Options, mem memguard.Memory, total uint64) (memguard.Plan, st
 		Size: total, Memory: mem, Candidates: candidateList(cands), Forced: forced,
 		Policy: policyOf(o.MemPolicy), Samples: hist.Samples,
 	})
-	if err == nil && mem.Uncertain && !plan.Forced {
-		plan.Reason = joinReason(plan.Reason,
-			"Job Object 上限读不到（预算按本机空闲内存算，不可信），已排除整块解析档")
+	if err == nil && excluded != "" && !plan.Forced {
+		plan.Reason = joinReason(plan.Reason, excluded)
 	}
 	if err != nil {
 		return memguard.Plan{}, strategy{}, nil, types.Errorf(types.CodeUsage, "%v", err)
