@@ -9,8 +9,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,19 +31,27 @@ const (
 	maxArchive    = 200 << 20
 	maxBinary     = 400 << 20
 	checksumsName = "checksums.txt"
+
+	// 网络重试：GitHub API 与资产下载经常遇到瞬断（EOF / connection reset / 5xx），
+	// 退避按指数增长（base、2×base、4×base…），封顶 maxRetryDelay。
+	defaultAttempts   = 3
+	defaultRetryDelay = 500 * time.Millisecond
+	maxRetryDelay     = 10 * time.Second
 )
 
 type Updater struct {
-	Repo      string
-	APIBase   string
-	Client    *http.Client
-	Current   string // 当前版本，可带 v；非发版构建（如 dev）视为未知
-	OS, Arch  string
-	Exe       string // 要替换的可执行文件，空则取当前进程
-	Token     string
-	AllowHTTP bool                             // 仅测试用：允许 http 下载
-	Verify    func(path, version string) error // 替换前运行新二进制自检，nil 跳过
-	Progress  io.Writer
+	Repo       string
+	APIBase    string
+	Client     *http.Client
+	Current    string // 当前版本，可带 v；非发版构建（如 dev）视为未知
+	OS, Arch   string
+	Exe        string // 要替换的可执行文件，空则取当前进程
+	Token      string
+	AllowHTTP  bool                             // 仅测试用：允许 http 下载
+	Attempts   int                              // 一个 URL 最多尝试几次（默认 3，含首次）
+	RetryDelay time.Duration                    // 首次重试等待，之后指数增长（默认 500ms）
+	Verify     func(path, version string) error // 替换前运行新二进制自检，nil 跳过
+	Progress   io.Writer
 }
 
 // New 使用默认配置；DTOOL_REPO / DTOOL_UPDATE_API 可覆盖仓库与 API 地址（镜像、测试）。
@@ -137,22 +147,155 @@ func (u *Updater) get(ctx context.Context, url string, auth bool) (*http.Respons
 	return u.Client.Do(req)
 }
 
-func (u *Updater) apiJSON(ctx context.Context, p string, out any) error {
-	resp, err := u.get(ctx, u.APIBase+p, true)
+// attempts 返回一个 URL 最多尝试几次（含首次）。
+func (u *Updater) attempts() int {
+	if u.Attempts > 1 {
+		return u.Attempts
+	}
+	return defaultAttempts
+}
+
+// backoff 返回第 n 次重试前的等待时间：指数退避 base × 2^(n-1)，封顶 maxRetryDelay。
+// n 从 1 起（第 1 次重试等 base，第 2 次等 2×base…）。
+func (u *Updater) backoff(n int) time.Duration {
+	base := u.RetryDelay
+	if base <= 0 {
+		base = defaultRetryDelay
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > 16 {
+		n = 16 // 防止移位溢出
+	}
+	d := base << (n - 1)
+	if d <= 0 || d > maxRetryDelay {
+		d = maxRetryDelay
+	}
+	return d
+}
+
+// retryableNet 判断一次网络失败是否值得重试（瞬断 vs 明确的拒绝）。
+func retryableNet(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, s := range []string{
+		"eof", "connection reset", "connection refused", "broken pipe",
+		"timeout", "timed out", "temporary failure", "no such host", "tls handshake",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchOnce 取回一个 URL 的响应体；retryable 表示这次失败值得重试。
+func (u *Updater) fetchOnce(ctx context.Context, url, what string, auth bool, limit int64) ([]byte, bool, error) {
+	resp, err := u.get(ctx, url, auth)
 	if err != nil {
-		return types.Errorf(types.CodeExec, "request failed: %v", err).WithHint("检查网络，或设置 DTOOL_UPDATE_API 使用镜像")
+		var te *types.Error
+		if errors.As(err, &te) { // 非 https 等策略性拒绝：重试没有意义，原样返回
+			return nil, false, err
+		}
+		werr := types.Errorf(types.CodeExec, "request failed: %v", err).
+			WithHint("检查网络/代理，或设置 DTOOL_UPDATE_API 使用镜像")
+		return nil, retryableNet(err), werr
 	}
 	defer resp.Body.Close()
 	switch {
+	case resp.StatusCode == http.StatusOK:
+		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		if err != nil {
+			return nil, retryableNet(err), err // 读一半断了也算瞬断
+		}
+		if int64(len(body)) > limit {
+			return nil, false, types.Errorf(types.CodeExec, "download %s exceeds %d bytes", what, limit)
+		}
+		return body, false, nil
 	case resp.StatusCode == http.StatusNotFound:
-		return types.Errorf(types.CodeNotFound, "release not found (%s)", p)
-	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests:
-		return types.Errorf(types.CodeExec, "GitHub API rate limited (HTTP %d)", resp.StatusCode).
+		return nil, false, types.Errorf(types.CodeNotFound, "release not found (%s)", what)
+	case resp.StatusCode == http.StatusForbidden:
+		return nil, false, types.Errorf(types.CodeExec, "GitHub API rate limited (HTTP 403)").
 			WithHint("设置环境变量 GITHUB_TOKEN 后重试")
-	case resp.StatusCode != http.StatusOK:
-		return types.Errorf(types.CodeExec, "unexpected HTTP %d from %s", resp.StatusCode, p)
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return nil, true, types.Errorf(types.CodeExec, "GitHub 限流 (HTTP 429)")
+	case resp.StatusCode >= 500:
+		return nil, true, types.Errorf(types.CodeExec, "GitHub 服务端错误 (HTTP %d)", resp.StatusCode)
+	default:
+		return nil, false, types.Errorf(types.CodeExec, "unexpected HTTP %d from %s", resp.StatusCode, what)
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+}
+
+// fetch 带指数退避重试地取回响应体。瞬断（EOF / reset / 5xx / 429）会重试，
+// 明确的拒绝（404 / 403 限流 / 非 https / 超限）立即返回。
+func (u *Updater) fetch(ctx context.Context, url, what string, auth bool, limit int64) ([]byte, error) {
+	attempts, tried := u.attempts(), 0
+	var lastErr error
+	for i := 1; i <= attempts; i++ {
+		tried = i
+		body, retryable, err := u.fetchOnce(ctx, url, what, auth, limit)
+		if err == nil {
+			if i > 1 {
+				u.logf("%s：第 %d 次尝试成功", what, i)
+			}
+			return body, nil
+		}
+		if ctx.Err() != nil {
+			return nil, types.Errorf(types.CodeInterrupted, "已中断：更新请求被取消")
+		}
+		lastErr = err
+		if !retryable || i == attempts {
+			break
+		}
+		delay := u.backoff(i)
+		u.logf("请求 %s 失败（%v）；%s 后重试（第 %d/%d 次）", what, err, delay, i+1, attempts)
+		select {
+		case <-ctx.Done():
+			return nil, types.Errorf(types.CodeInterrupted, "已中断：更新请求被取消")
+		case <-time.After(delay):
+		}
+	}
+	return nil, u.explain(lastErr, tried)
+}
+
+// explain 把最终失败包装成「发生了什么 + 还能怎么办」：网络/代理不通时给出 Releases 页面，
+// 让用户不必依赖工具自己去下载。
+func (u *Updater) explain(err error, tried int) error {
+	te := types.AsError(err, types.CodeExec)
+	msg := te.Message
+	if tried > 1 {
+		msg = fmt.Sprintf("%s（已尝试 %d 次）", msg, tried)
+	}
+	out := types.Errorf(te.Code, "%s", msg)
+	out.Detail = te.Detail
+	hint := te.Hint
+	if hint != "" {
+		hint += "；"
+	}
+	out.Hint = hint + fmt.Sprintf("可在浏览器直接下载：https://github.com/%s/releases（用 --version 指定版本）", u.Repo)
+	return out
+}
+
+func (u *Updater) apiJSON(ctx context.Context, p string, out any) error {
+	body, err := u.fetch(ctx, u.APIBase+p, p, true, 16<<20)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return types.Errorf(types.CodeExec, "解析 GitHub 响应失败：%v", err).
+			WithHint("代理/镜像可能返回了非 GitHub 内容")
+	}
+	return nil
 }
 
 func (u *Updater) tagPath(tag string) string {
@@ -232,22 +375,7 @@ func findAsset(r *ghRelease, name string) *ghAsset {
 }
 
 func (u *Updater) download(ctx context.Context, a *ghAsset, limit int64) ([]byte, error) {
-	resp, err := u.get(ctx, a.URL, false)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, types.Errorf(types.CodeExec, "download %s: HTTP %d", a.Name, resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, types.Errorf(types.CodeExec, "download %s exceeds %d bytes", a.Name, limit)
-	}
-	return data, nil
+	return u.fetch(ctx, a.URL, a.Name, false, limit)
 }
 
 // expectedSum 从 checksums.txt（sha256sum 格式，文件名可带 ./ 或 *）取出 name 的摘要。

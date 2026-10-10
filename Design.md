@@ -957,6 +957,23 @@ Excel 文件
                               [visualize] ──► Action E ──► 新图表
    │
    ▼
+### 8.8 自更新（internal/updater）
+
+`--update` 与 `upgrade` 都走 GitHub Releases API：列 release → 选资产 → 下载 → 校验 `checksums.txt` 的 sha256 → 新二进制自检 → 替换文件。整条链路的失败模式里，**「网络瞬断」和「真的没有新版本」必须区分开**：前者重试就能过去，后者重试只是浪费时间。
+
+| 失败 | 处置 |
+|------|------|
+| `EOF` / `connection reset` / `broken pipe` / 各种 timeout / TLS handshake 失败 | 可重试：指数退避 500ms → 1s → 2s，上限 10s；最多 3 次尝试 |
+| HTTP 5xx、429（含 `Retry-After`） | 可重试（服务端侧问题） |
+| HTTP 404（release 不存在）、403（限流，`hint` 提示 `GITHUB_TOKEN`）、非 https、超出体积上限 | 立即失败，不重试 |
+| `context.Canceled` / `DeadlineExceeded` | 立即失败，映射为 `CodeInterrupted`（5） |
+
+重试与下载共用同一条 `fetch` 路径（`get` → 状态码分类 → `io.ReadAll` 限长），所以 API JSON 和资产下载的行为一致。`Attempts` / `RetryDelay` 是 `Updater` 的字段，测试把它压到毫秒级，避免为了覆盖退避逻辑而真的睡 3.5 秒。
+
+失败信息分两层：`error` 说明「做了什么、试了几次」（如 `request failed: unexpected EOF（已尝试 3 次）`），`hint` 给出**不依赖本工具**的退出口 —— `https://github.com/dezhishen/dtool/releases`（可用 `--version` 指定版本，`DTOOL_UPDATE_API` 换镜像）。这样即便 GitHub 完全不可达，用户与 AI Agent 都有明确的下一步，而不是反复重跑同一条命令。
+
+---
+
 [actions list / show / trace / export] ──► AI 读取进度、结果、注释、派生链
 ```
 
@@ -1071,6 +1088,7 @@ type ErrorResponse struct {
 - **沙箱拒绝**：SQL 访问被禁止的路径时，返回 `sandbox violation` 并说明允许的范围。
 - **超时/超限**：`--timeout` 或 `--max-rows` 触发时返回明确错误码，而不是截断后假装成功。
 - **引用失效**：`action:<id>` 指向不存在的 Action 时，返回 `action not found` 并列出最近可用的 Action ID。
+- **网络瞬断**：自更新（`--update` / `upgrade`）遇到 `EOF`、连接重置、5xx、429 时按指数退避自动重试（3 次）；彻底失败的错误里写明尝试次数，`hint` 给出 Releases 页面，直接手动下载即可。
 
 ---
 

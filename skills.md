@@ -28,7 +28,7 @@ dtool version                                        # 确认可用（含 versio
 ```
 
 - 装完包内还有 `README.md`、`skills.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`。
-- 升级自身：`dtool --update [--pre]` 只检查，`dtool upgrade [--pre]` 动手（下载后校验 `checksums.txt` 的 sha256 并跑一次自检，任一步失败都不改动现有文件）。二进制要放在**有写权限**的目录。
+- 升级自身：`dtool --update [--pre]` 只检查，`dtool upgrade [--pre]` 动手（下载后校验 `checksums.txt` 的 sha256 并跑一次自检，任一步失败都不改动现有文件）。二进制要放在**有写权限**的目录；网络瞬断按指数退避自动重试 3 次，彻底失败时按提示去 Releases 手动下载。
 - **只有预览 tag 时加 `--pre`**，否则预览版不算可升级版本；不确定当前构建类型看 `dtool version` 的 `channel`（stable/preview/dev/local）。
 
 ## 核心概念
@@ -72,7 +72,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，会在 ~0.25s 内被看护进程落盘收敛，见下） |
 | `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
-| `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身，见文末 |
+| `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
 
 通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
 
@@ -217,3 +217,5 @@ dtool upgrade --version 1.2.0          # 指定版本（可降级）；预览版
 ```
 
 `--version` 与 `--pre` 不能同时使用。Windows 下运行中的 `dtool.exe` 会被改名为 `.old`，新文件改名就位，下次启动自动清理；若提示文件被占用，请关闭其他 dtool 进程后重试。无写权限时在 Linux/macOS 用 `sudo`，Windows 用管理员。GitHub 限流时设置 `GITHUB_TOKEN`。
+
+网络瞬断（`EOF` / `connection reset` / 5xx / 429）会自动重试 3 次，间隔指数退避（500ms → 1s → 2s，上限 10s）；仍失败时错误 JSON 的 `error` 会写明「已尝试 N 次」，`hint` 里给出 `https://github.com/dezhishen/dtool/releases`——**AI Agent 遇到这种情况不必反复重试命令**，直接把 Release 资产下载地址告诉用户即可。

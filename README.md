@@ -211,6 +211,14 @@ dtool upgrade --version 1.2.0               # 指定版本（可降级）；预�
 
 升级前会校验 Release 中 `checksums.txt` 的 sha256，并先运行新二进制自检；任何一步失败都不会改动现有文件。Windows 下运行中的 exe 不能覆盖，因此先把旧文件改名为 `.old` 再让新文件就位（失败回滚，`.old` 下次启动自动清理）。GitHub 限流时设置 `GITHUB_TOKEN`；`DTOOL_REPO` / `DTOOL_UPDATE_API` 可指向镜像。
 
+GitHub 连接偶发中断（`EOF`、`connection reset`、5xx、429 等）会自动重试 3 次，间隔按**指数退避** 500ms → 1s → 2s（上限 10s）；瞬时失败只要成功一次就继续。重试仍失败时会说明「已尝试几次」，并给出无需本工具的手动下载入口：
+
+```text
+https://github.com/dezhishen/dtool/releases   # 自行下载对应平台的压缩包，替换二进制即可
+```
+
+即：`upgrade` 不会因为一次网络抖动就放弃，失败信息里也直接带上 Release 页面地址，不必再靠工具自己去猜。
+
 面向 AI Agent 的使用指南见 [skills.md](skills.md)。
 
 ## 中文图表与配置文件

@@ -11,13 +11,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dezhishen/dtool/pkg/types"
 )
@@ -457,5 +460,139 @@ func TestVerifyBinary(t *testing.T) {
 	}
 	if err := verifyBinary(filepath.Join(t.TempDir(), "missing"), "1.1.0"); err == nil {
 		t.Fatal("missing binary accepted")
+	}
+}
+
+// dropConn 不返回响应、直接断开连接，客户端会看到 EOF —— 这正是用户升级时遇到的失败形态。
+func dropConn(w http.ResponseWriter) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return
+	}
+	if conn, _, err := hj.Hijack(); err == nil {
+		_ = conn.Close()
+	}
+}
+
+func TestBackoffIsExponential(t *testing.T) {
+	u := &Updater{}
+	for _, c := range []struct {
+		n    int
+		want time.Duration
+	}{{1, 500 * time.Millisecond}, {2, time.Second}, {3, 2 * time.Second}, {4, 4 * time.Second}, {5, 8 * time.Second}, {6, maxRetryDelay}, {7, maxRetryDelay}} {
+		if got := u.backoff(c.n); got != c.want {
+			t.Fatalf("backoff(%d) = %s, want %s", c.n, got, c.want)
+		}
+	}
+	u2 := &Updater{RetryDelay: 100 * time.Millisecond}
+	if got := u2.backoff(1); got != 100*time.Millisecond {
+		t.Fatalf("自定义 base: %s", got)
+	}
+	if got := u2.backoff(3); got != 400*time.Millisecond {
+		t.Fatalf("自定义 base 指数: %s", got)
+	}
+}
+
+func TestCheckRetriesTransientFailuresThenSucceeds(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch atomic.AddInt32(&hits, 1) {
+		case 1:
+			dropConn(w) // EOF
+		case 2:
+			w.WriteHeader(http.StatusBadGateway) // 502
+		default:
+			_, _ = w.Write([]byte(`[{"tag_name":"v9.9.9","assets":[]}]`))
+		}
+	}))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	u := &Updater{Repo: "o/r", APIBase: srv.URL, Client: srv.Client(), AllowHTTP: true,
+		Progress: &logBuf, RetryDelay: time.Millisecond}
+	res, err := u.Check(context.Background(), false)
+	if err != nil {
+		t.Fatalf("瞬断应重试后成功：%v", err)
+	}
+	if res.Latest != "9.9.9" { // Check 返回的 latest 已去掉 v 前缀
+		t.Fatalf("latest = %q", res.Latest)
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Fatalf("请求次数 = %d, want 3", got)
+	}
+	logs := logBuf.String()
+	if !strings.Contains(logs, "后重试") || !strings.Contains(logs, "第 2/3 次") {
+		t.Fatalf("重试日志缺失：%q", logs)
+	}
+}
+
+func TestFetchPersistentFailureExplainsManualDownload(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		dropConn(w)
+	}))
+	defer srv.Close()
+
+	u := &Updater{Repo: "o/r", APIBase: srv.URL, Client: srv.Client(), AllowHTTP: true,
+		Progress: io.Discard, RetryDelay: time.Millisecond}
+	_, err := u.Check(context.Background(), false)
+	var te *types.Error
+	if !errors.As(err, &te) {
+		t.Fatalf("want types.Error: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Fatalf("请求次数 = %d, want 3（默认 3 次尝试）", got)
+	}
+	if !strings.Contains(te.Message, "已尝试 3 次") {
+		t.Fatalf("message 未说明重试次数：%q", te.Message)
+	}
+	if !strings.Contains(te.Message, "request failed") {
+		t.Fatalf("message 应保留 request failed 前缀：%q", te.Message)
+	}
+	if !strings.Contains(te.Hint, "检查网络/代理") {
+		t.Fatalf("hint 应提示网络/镜像：%q", te.Hint)
+	}
+	if !strings.Contains(te.Hint, "https://github.com/o/r/releases") {
+		t.Fatalf("hint 未给出手动下载入口：%q", te.Hint)
+	}
+}
+
+func TestFetchDoesNotRetryPermanentFailures(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	u := &Updater{Repo: "o/r", APIBase: srv.URL, Client: srv.Client(), AllowHTTP: true,
+		Progress: io.Discard, RetryDelay: time.Millisecond}
+	_, err := u.Check(context.Background(), false)
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeNotFound {
+		t.Fatalf("want not found: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("404 不应重试，请求次数 = %d", got)
+	}
+	if strings.Contains(te.Message, "已尝试") {
+		t.Fatalf("未重试却写了尝试次数：%q", te.Message)
+	}
+}
+
+func TestRetryableNetClassification(t *testing.T) {
+	if retryableNet(context.Canceled) || retryableNet(context.DeadlineExceeded) {
+		t.Fatal("取消/超时不该重试")
+	}
+	for _, msg := range []string{"unexpected EOF", "read tcp: connection reset by peer", "broken pipe", "i/o timeout", "TLS handshake timeout"} {
+		if !retryableNet(errors.New(msg)) {
+			t.Fatalf("%q 应可重试", msg)
+		}
+	}
+	for _, msg := range []string{"unknown authority", "no such file or directory", "release not found"} {
+		if retryableNet(errors.New(msg)) {
+			t.Fatalf("%q 不该重试", msg)
+		}
 	}
 }
