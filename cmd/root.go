@@ -145,6 +145,21 @@ func requireFlags(c *cobra.Command, names ...string) error {
 	return nil
 }
 
+// warnInertLoadMode 提前说明 --load-mode 的适用范围：它管的是 JSON → 内存 SQLite 的装入
+// （只有 query / pipeline 会用到）。发给 convert 这类命令时会被静静忽略，先说出来，
+// 免得用户以为「换个参数就能省内存」而白试一轮。
+func warnInertLoadMode(c *cobra.Command) {
+	if !c.Flags().Changed("load-mode") {
+		return
+	}
+	switch c.Name() {
+	case "query", "pipeline":
+		return
+	}
+	fmt.Fprintf(c.ErrOrStderr(),
+		"注意：--load-mode 只对 JSON 装入（query / pipeline）生效，%s 不使用该参数，已忽略。\n", c.Name())
+}
+
 func loadConfig(c *cobra.Command, _ []string) error {
 	cfgFont = ""
 	if g.loadMode == "" {
@@ -164,6 +179,7 @@ func loadConfig(c *cobra.Command, _ []string) error {
 		}
 		parsedMaxMemory = &n
 	}
+	warnInertLoadMode(c)
 	if g.config == "" {
 		return nil
 	}

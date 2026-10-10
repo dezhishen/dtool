@@ -32,6 +32,49 @@ func run(t *testing.T, args ...string) (map[string]any, error) {
 	return m, err
 }
 
+// runStreams 与 run 相同，但同时捕获 stderr（用于断言提示信息）。
+func runStreams(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	oldArgs, oldStreams := os.Args, [2]*os.File{os.Stdout, os.Stderr}
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Args, os.Stdout, os.Stderr = append([]string{"dtool"}, args...), wOut, wErr
+	g, cfgFont, parsedMaxMemory = globalFlags{}, "", nil
+	err := Execute("test")
+	wOut.Close()
+	wErr.Close()
+	os.Args, os.Stdout, os.Stderr = oldArgs, oldStreams[0], oldStreams[1]
+	_, _ = io.ReadAll(rOut) // 排空 stdout，避免写端 EPIPE
+	b, _ := io.ReadAll(rErr)
+	rOut.Close()
+	rErr.Close()
+	return string(b), err
+}
+
+// --load-mode 只对 JSON 装入（query / pipeline）生效：发给 convert 会被忽略，
+// 但必须显式说一句，别让人以为「换了参数就能省内存」。
+func TestLoadModeWarnsWhenInert(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := xlsx(t, dir)
+
+	errOut, err := runStreams(t, "convert", "--load-mode", "stream", "--input", data, "--name", "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "--load-mode") || !strings.Contains(errOut, "已忽略") {
+		t.Fatalf("convert 应提示 --load-mode 被忽略，实际 stderr = %q", errOut)
+	}
+
+	errOut, err = runStreams(t, "--load-mode", "stream", "datasets", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "已忽略") {
+		t.Fatalf("datasets 也应提示忽略，实际 stderr = %q", errOut)
+	}
+}
+
 func xlsx(t *testing.T, dir string) string {
 	t.Helper()
 	f := excelize.NewFile()

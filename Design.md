@@ -818,7 +818,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 
 预算来源：`--max-memory` > `DTOOL_MAX_MEMORY` > cgroup v2/v1 限制（`min(limit-used, MemAvailable)`）> 未知（不检查）。统一预留 15% 余量。失败也会写入一条 `failed` 的 Action，便于事后追溯。
 
-估算模型都来自实测：JSON 整块解析 ≈ 文件 × 13、流式装入 ≈ × 2；xlsx 转换是「32MB 固定开销 + 文件 × 3」的线性模型（见 8.1）。倍率不同，**处置建议也必须分场景**：`--load-mode` 只对 `query` 成立；`convert` 已经流式、没有开关可切（峰值只随文件体积增长），对它说「改用流式」只会让人白试一个不存在的参数，所以 `CheckSize`/`CheckNeed` 显式接收 `hint`（`HintLoadMode` / `HintSplitInput`），并有测试锁定这一点。
+估算模型都来自实测：JSON 整块解析 ≈ 文件 × 13、流式装入 ≈ × 2；xlsx 转换是「32MB 固定开销 + 文件 × 3」的线性模型（见 8.1）。倍率不同，**处置建议也必须分场景**：`--load-mode` 只对 `query` 成立；`convert` 只有一个流式实现、没有开关可切（峰值只随文件体积增长）。它作为全局参数会被 cobra 接受、但没人读，等于静静忽略——所以 CLI 用 `warnInertLoadMode` 在 stderr 补一句「已忽略」，别让用户以为换了参数就会变。同理 `CheckSize`/`CheckNeed` 显式接收 `hint`（`HintLoadMode` / `HintSplitInput`），并有测试锁定这一点。
 
 1 核 2GB 实测：7.4MB / 15 万行 × 9 列的 xlsx 现在峰值 47MB、12.8s（改造前 1.9GB、21.2s）；17.8MB / 40 万行的 xlsx 现在 74MB、23.5s（改造前在 2GB 上限下直接 OOM）。预算不足（如 `--max-memory 100M`）时仍在转换前拦下并给出「32MB 固定开销 + 文件 × 6 的流式估算需 134MB」。
 
