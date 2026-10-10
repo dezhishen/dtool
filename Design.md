@@ -991,7 +991,7 @@ ratio 的 P10/P50/P90、耗时中位数）。fatal 崩溃时进程什么都不�
 它是「同一个输入只付一次试错代价」的载体。
 
 **升级渠道（8.8.1）**：`stable` / `preview` / `dev` 三选一，`--channel` 指定（`--pre` 是
-`preview` 的旧写法）。前两个渠道比版本号（`vX.Y.Z` / `-preview.N`），`dev` 渠道比**构建身份**：
+`preview` 的旧写法）。前两个渠道比版本号（`vX.Y.Z` / `-preview.N`；**按语义化版本比较，不依赖 GitHub 列表顺序**——那张列表按 tag 名字典序排，`preview.10` 会排在 `preview.9` 下面，所以预览序号也**不能零填充**：`preview.010` 不是合法 semver，会被解析器跳过而变得不可见），`dev` 渠道比**构建身份**：
 dev 构建之间没有版本序，硬比大小会出现「装完又说有新版」或「悄悄降级」。
 
 为此 dev 产物必须发成 **Release 资产**（updater 走 Releases API，读不到 workflow artifact），

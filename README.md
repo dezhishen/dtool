@@ -341,6 +341,13 @@ tag 即发版，推送后由 `.github/workflows/release.yml` 校验、测试、�
 | 正式版 | `vX.Y.0` | 打在 `main`；基线为上一个正式/补丁版（汇总整个预览期） |
 | 补丁版 | `vX.Y.Z`（Z≥1） | 打在 `main` 或 `release/X.Y`；要求 `vX.Y.0` 已存在 |
 
+**预览版本号的「排序错觉」**：GitHub 的 Releases 列表是按 **tag 名**（字典序）排的，不是发布时间，所以
+`v0.2.0-preview.10` 会显示在 `v0.2.0-preview.9`、甚至 `v0.2.0-preview.1` 的**下面**——看着像"没排对"。
+不要用零填充（`preview.010`）去凑字典序：semver 明确规定数字标识符不得有前导零，这种 tag 会被
+`scripts/release-info.sh` 直接拒绝（CI 发版失败），也会被 `internal/updater` 的解析跳过 —— 反而让这个
+版本对 `--update` / `upgrade` **完全不可见**。列表顺序只是展示问题：选版一律按语义化版本比较，与列表顺序
+无关（`TestLatestIgnoresReleaseListOrder` 按 GitHub 的真实返回顺序钉住这一点）。
+
 **预览版会随正式版发布自动清理**：`.github/workflows/prune-previews.yml` 每天定时跑一次
 （也可手动触发，手动触发默认 `dry_run=true` 只打印不删），删除「对应正式版已经发布」且**正式版发布满 14 天**
 的预览版 Release 与 tag（`--retention-days` 可调，`0` 表示正式版一发就清理）。

@@ -190,6 +190,38 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+// GitHub 的 Releases 列表是按 **tag 名**排的，不是按时间：真实返回顺序是
+// 9, 8, …, 2, 10, 1（preview.10 排在 preview.1 前面、preview.2 后面）。
+// 选"最新"绝不能依赖列表顺序——这里就按 GitHub 的真实顺序喂进去，断言仍然选中 .10。
+// 线上验证过：v0.2.0-preview.9 的二进制 `--update --pre` 报的是 latest=0.2.0-preview.10。
+func TestLatestIgnoresReleaseListOrder(t *testing.T) {
+	var rels []rel
+	order := []int{9, 8, 7, 6, 5, 4, 3, 2, 10, 1} // GitHub 的字典序，不是时间序
+	for _, n := range order {
+		rels = append(rels, release(t, fmt.Sprintf("v1.0.0-preview.%d", n), "linux", fmt.Sprintf("P%d", n)))
+	}
+	rels = append(rels, release(t, "v0.9.0", "linux", "OLD-STABLE"))
+	u := fakeGitHub(t, rels)
+	u.Current = "1.0.0-preview.9"
+
+	res, err := u.CheckChannel(context.Background(), ChannelPreview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Latest != "1.0.0-preview.10" || !res.UpdateAvailable {
+		t.Fatalf("列表顺序不该影响选版：%+v", res)
+	}
+
+	u.Exe, u.Verify = installedExe(t, "OLD"), nil
+	up, err := u.Upgrade(context.Background(), UpgradeOptions{Pre: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !up.Upgraded || up.To != "1.0.0-preview.10" || read(t, u.Exe) != "P10" {
+		t.Fatalf("升级应落到 preview.10：%+v %q", up, read(t, u.Exe))
+	}
+}
+
 func TestCheckStableBeatsSameNumberPreview(t *testing.T) {
 	u := fakeGitHub(t, []rel{{tag: "v1.1.0"}, {tag: "v1.1.0-preview.9", prerelease: true}})
 	u.Current = "1.0.0"

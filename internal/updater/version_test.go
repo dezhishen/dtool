@@ -37,3 +37,19 @@ func TestTagAndPrerelease(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+// 零填充是被 semver 明确禁止的（数字标识符不得有前导零），这里把它钉成"必须拒绝"。
+//
+// 背景：GitHub 的 Releases 列表是按 **tag 名**排序的（不是时间），于是
+// v0.2.0-preview.10 会显示在 v0.2.0-preview.9 甚至 v0.2.0-preview.1 的下面，
+// 看起来像"没排对"，很容易让人想改成 preview.010 去凑字典序。代价是那个版本对我们
+// **完全不可见**：ParseVersion 解析失败 → latest() 静默跳过 → --update / upgrade 永远
+// 看不到它，CI 的 release-info.sh 也会直接拒绝这个 tag。
+// 列表顺序是展示问题，版本号能不能被解析是功能问题——两者冲突时只能保后者。
+func TestPaddedPreviewIsRejected(t *testing.T) {
+	for _, in := range []string{"v0.2.0-preview.010", "0.2.0-preview.01", "0.2.0-preview.00"} {
+		if v, err := ParseVersion(in); err == nil {
+			t.Errorf("ParseVersion(%q) 不该接受（前导零不是合法 semver）：%+v", in, v)
+		}
+	}
+}
