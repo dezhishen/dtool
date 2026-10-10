@@ -78,7 +78,11 @@ dtool version --deps       # 附带编译进二进制的依赖模块及版本
 
 元数据在打包时由 `scripts/ldflags.sh` 注入（`make build`、`make build-all`、`make release-build` 和 Release 流水线共用同一份），本机 `go build` 则回退到 Go 嵌入的 VCS 信息。`channel` 由版本号判定：`X.Y.Z` 为 `stable`，`X.Y.0-preview.N` 为 `preview`，`dev-*` 为 `dev`，其余为 `local`。
 
-**main 分支的测试构建**：每次推送到 `main`，CI 在测试通过后构建全部平台，版本号为 `dev-<Actions run id>`，作为 workflow artifact（`dtool-dev-<run id>`，保留 14 天）供下载测试。它不创建 tag 或 Release，所以不会被 `dtool --update` / `upgrade` 当作可升级版本；`dtool version` 里的 `build_url` 可直接跳转到对应的运行记录。
+**main 分支的测试构建**：每次推送到 `main`（以及每 4 小时定时、手动触发），CI 在测试通过后构建全部平台，
+版本号为 `dev-<Actions run id>`，并**滚动发布**到固定 tag `dev`（同名资产每次覆盖，只保留最新一次）。
+所以 `dtool upgrade --channel dev` 装的就是它；`stable` / `preview` 两个渠道完全看不到 dev 构建。
+每次构建同时留一份 workflow artifact（`dtool-dev-<run id>`，14 天），`dtool version` 里的 `build_url`
+可直接跳转到对应的运行记录。
 
 ## 示例
 
@@ -264,7 +268,14 @@ dtool --update [--channel stable|preview|dev]   # 只检查，不改动任何文
 dtool upgrade [--channel dev]                   # 升级到该渠道的最新版
 dtool upgrade --version 1.2.0                   # 指定版本（可降级）；预览版如 1.2.0-preview.1
 dtool upgrade --version dev                     # dev 构建也可显式指定（滚动发布只保留最新一次）
+dtool upgrade --skills                          # 顺带取该版本的 skills.md；裸写法写到当前目录
+dtool upgrade --skills=docs/                    # 或写进指定目录（不存在会创建）/ --skills=agent.md 指定文件
 ```
+
+`--skills[=路径]`：把**你装的那个版本**的 `skills.md`（面向 AI Agent 的使用指南）另存一份——取值是目录就写
+`<目录>/skills.md`（目录不存在会创建），是 `.md` 文件就写该文件，裸 `--skills` 写当前目录。手册取自发布归档，
+和二进制是同一份资产、同一次 sha256 校验，不会出现「二进制是旧版、手册是新版」；已经是最新版本时也能单独取
+（完全不碰二进制），JSON 里的 `skills_changed` 说明内容有没有变化。
 
 `dev` 渠道的特殊之处：dev 构建之间**没有版本序**（`dev-<run id>` 不是语义化版本），所以
 它比的是**构建身份**——发布里的 `dev-build.txt` 记着当前构建号，和二进制里的

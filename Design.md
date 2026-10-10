@@ -539,15 +539,19 @@ dtool actions export --output .dtool/actions_dump.json
 
 ```bash
 dtool version [--short] [--deps]        # 版本与构建元数据；--short 只输出版本号，--deps 附带依赖模块版本
-dtool upgrade [--version V] [--channel stable|preview|dev] [--pre]   # 升级自身，可降级
+dtool upgrade [--version V] [--channel stable|preview|dev] [--pre] [--skills[=路径]]  # 升级自身，可降级；顺带另存该版本的 skills.md
 dtool query --sql ... --update          # 查询前先检查更新（内置同一套逻辑）
 ```
 
 渠道：`stable`（默认，最新正式版）/ `preview`（正式版 + 预览版，等价于旧的 `--pre`）/
 `dev`（`main` 的最新构建，滚动发布到 tag `dev`，比的是构建号而不是版本号大小）。
 `--version` 可指定任意历史版本（含降级）；dev 构建写 `--version dev` 或 `--version dev-<run id>`，
-但 dev 渠道只保留最新一次构建。网络瞬断按指数退避重试 3 次，失败时 `hint` 给出 Releases 页面，
-见 8.4.3。
+但 dev 渠道只保留最新一次构建。网络瞬断按指数退避重试 3 次，失败时 `hint` 给出 Releases 页面，见 8.4.3。
+
+`--skills[=路径]` 把**目标版本**的 `skills.md`（agent 手册）另存一份：目录（不存在则创建）写成
+`<目录>/skills.md`，明确以 `.md` 结尾的路径当文件，裸 `--skills` 写当前目录。手册直接从已经过
+sha256 校验的平台归档里取（不额外走网络），因此永远与刚装上的二进制同源；已经是最新版本时也可以
+单独取（只下载校验归档，不碰二进制）。结果里的 `skills_changed` 表示内容是否变化。
 
 ## 6. JSON Schema 生成设计
 

@@ -29,6 +29,7 @@ dtool version                                        # 确认可用（含 versio
 
 - 装完包内还有 `README.md`、`skills.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`。
 - 升级自身：`dtool --update [--pre]` 只检查，`dtool upgrade [--pre]` 动手（下载后校验 `checksums.txt` 的 sha256 并跑一次自检，任一步失败都不改动现有文件）。二进制要放在**有写权限**的目录；网络瞬断按指数退避自动重试 3 次，彻底失败时按提示去 Releases 手动下载。
+- **同时也更新本文件（agent 手册）**：`dtool upgrade --skills[=路径]`——目录写 `<目录>/skills.md`，明确 `.md` 结尾的写该文件，裸 `--skills` 写当前目录。手册取自发布归档（与二进制同一次 sha256 校验），不会出现「二进制旧、手册新」；已经是最新版本时也能单独取（不碰二进制），`skills_changed` 说明内容有没有变。
 - **只有预览 tag 时加 `--pre`**，否则预览版不算可升级版本；不确定当前构建类型看 `dtool version` 的 `channel`（stable/preview/dev/local）。
 
 ## 核心概念
@@ -76,7 +77,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `--mem-policy try\|strict` | 所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败 |
 | `-c, --config f.yaml` | 配置文件（YAML：font / workspace / preview_rows 等）；命令行参数优先 |
 | `--sandbox` | 默认开启：SQL 只允许单条 SELECT，且只能读工作区 / 当前目录 / `--source` 文件；`--sandbox=false` 关闭 |
-| `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
+| `--update [--pre]` / `upgrade [--version V] [--pre] [--skills[=路径]]` | 检查更新 / 升级自身；`--skills` 顺带另存该版本的 skills.md（目录 / `.md` 文件 / 裸写法=当前目录）；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
 
 通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
 
@@ -268,6 +269,8 @@ dtool --update --channel dev   # main 的最新构建（滚动发布）
 dtool upgrade             # 升级到最新正式版（先校验 sha256，再替换）
 dtool upgrade --pre       # 允许最新预览版
 dtool upgrade --version 1.2.0          # 指定版本（可降级）；预览版写 1.2.0-preview.1
+dtool upgrade --skills            # 顺带取该版本的 skills.md（写到当前目录）
+dtool upgrade --skills=~/.dtool   # 或指定目录 / 文件：--skills=docs/ 或 --skills=agent.md
 ```
 
 渠道三选一：`stable`（默认）/ `preview`（`--pre`）/ `dev`（main 的最新构建）。
