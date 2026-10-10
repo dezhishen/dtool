@@ -103,6 +103,13 @@ func openWorkspace() (*workspace.Workspace, error) {
 	if err != nil {
 		return nil, types.Errorf(types.CodeGeneral, "open workspace: %v", err)
 	}
+	// 上次进程被强杀时来不及写结束状态，Action 会停在 running。这里统一回收一轮，
+	// 否则读 `.dtool/actions/<id>.json` 的人（脚本 / AI / git diff）会以为任务还在跑。
+	if n, err := (&action.Recorder{WS: ws}).Reconcile(); err != nil {
+		fmt.Fprintf(os.Stderr, "警告：回收被中断的 Action 失败：%v\n", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "已把 %d 个被中断的任务（进程已消失）标记为 stale。\n", n)
+	}
 	return ws, nil
 }
 

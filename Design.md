@@ -224,6 +224,10 @@ started ──► running ──► success
 - **success/failed**：执行结束时更新同一文件。
 - 中途崩溃时，Action 停留在 `running`，AI 可通过 `status` 识别异常任务。
 - Action 记录 `pid`；`running` 且进程已不存在时，`actions list` 将其显示为 `stale`，避免与真实运行中的任务混淆。
+- 更进一步，每次命令启动（`openWorkspace`）会调用 `Recorder.Reconcile` 做一次回收：把陈旧的
+  `running` 在 **Action 文件与 `index.json` 上一起落盘为 `stale`**，并补一条可读原因（「进程已消失
+  （PID n 不存在），任务被中断，结果未知」）。否则直接读 `.dtool/actions/<id>.json` 的脚本、AI 或
+  git diff 看到的仍是 `running`，会误以为任务还在跑。回收是幂等的，只在确有陈旧条目时才写盘。
 - 捕获 SIGINT/SIGTERM，尽力把状态置为 `failed`（`error.code=interrupted`）。
 
 ### 4.5 Action 索引
@@ -1029,7 +1033,8 @@ type ErrorResponse struct {
 - **文件不存在**：返回 JSON 错误，并写入 Action 的 `error` 字段。
 - **SQL 语法错误**：返回 SQLite 原始错误 + `hint`，例如 `"hint": "检查表名是否为 JSON 文件路径"`。
 - **图表字段缺失**：返回 `field not found`，并在 Action 的 `error.detail` 中列出可用字段。
-- **崩溃中断**：Action 停留在 `running`（`pid` 已不存在则显示 `stale`），AI 通过 `actions list --status running` 可发现并重试。
+- **崩溃中断**：Action 停留在 `running`；下次任何命令启动时会回收为 `stale`（Action 文件与索引一起落盘，
+  并写明「进程已消失…结果未知」），AI 通过 `actions list --status stale` 可发现并重试。
 - **沙箱拒绝**：SQL 访问被禁止的路径时，返回 `sandbox violation` 并说明允许的范围。
 - **超时/超限**：`--timeout` 或 `--max-rows` 触发时返回明确错误码，而不是截断后假装成功。
 - **引用失效**：`action:<id>` 指向不存在的 Action 时，返回 `action not found` 并列出最近可用的 Action ID。

@@ -29,6 +29,10 @@ var ErrPressure = errors.New("memory pressure")
 // WatchInterval 可在测试中调整。
 var WatchInterval = 200 * time.Millisecond
 
+// NoticeWriter 是看门狗触发时的提示输出；测试可替换。进程正在做不可中断的工作
+// （例如整块解析大 JSON）时，取消要等它跑完才会被观察到，提示先让用户知道发生了什么。
+var NoticeWriter io.Writer = os.Stderr
+
 // Memory 描述本次运行的内存预算。
 type Memory struct {
 	Limit     uint64 // 上限（cgroup 或显式配置），0 表示未知
@@ -139,6 +143,10 @@ func Watch(ctx context.Context, limit uint64) (context.Context, func()) {
 				return
 			case <-t.C:
 				if u := CurrentUsage(); u > limit {
+					fmt.Fprintf(NoticeWriter,
+						"内存超出预算（本进程已用 %s，预算 %s），正在中止；\n"+
+							"若迟迟没有输出，请 Ctrl+C 后用 --load-mode stream 或调大 --max-memory 重试。\n",
+						HumanSize(u), HumanSize(limit))
 					cancel(fmt.Errorf("%w: 本进程已用 %s，本次预算 %s", ErrPressure, HumanSize(u), HumanSize(limit)))
 					return
 				}

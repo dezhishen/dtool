@@ -69,7 +69,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y；y 必须是数值列 |
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
-| `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running） |
+| `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，下次命令启动时会落盘收敛，见下） |
 | `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex` | `annotate` 把用户口径/备注写进 Action |
 | `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身，见文末 |
 
@@ -154,13 +154,14 @@ preview_rows: 20
 
 JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `stream` / `full`。
 
-- `auto` 按文件大小自适应：**≥32MB 走流式**；可用内存不够整块解析时也自动转流式。所以一般情况下不用管它。
+- `auto` 按文件大小自适应：**≥32MB 走流式**；可用内存不够整块解析时也自动转流式；整块解析还要求峰值 ≤ 预算的 80%（留余量，免得擦着预算在中途被中止）。所以一般情况下不用管它。
 - 峰值内存：`full` ≈ 文件大小 × 13；`stream` ≈ ×2。
 - 1 核 2GB 下实测（默认 `auto`）：10 万行 2.4s；100 万行 19–29s；500 万行 1:29、604MB。默认参数即可，不必再调 `--timeout`。
 - **Excel（`convert`）也是流式的**：两阶段、单次解析，峰值 ≈ 32MB + 文件 × 3（实测 7.4MB/15 万行 → 47MB，17.8MB/40 万行 → 74MB），与行数无关。它没有、也不需要 `--load-mode`——那组开关选的是 JSON → 内存 SQLite 的装入方式，只对 `query` 生效。预检按「32MB + 文件 × 6」估算，超出预算才会在转换前拦下并给出数字与退出口。
 - `--timeout` 只约束**查询阶段**（默认 60s），载入耗时不计入。若内存充足、只想要速度，可用 `--load-mode full`（只解析一遍，更快）。
 - 内存不足时会**快速失败并说明原因**（含「预计需 xx、可用 xx」与 `--max-memory 0` 退出口），不会静默被杀；这类失败同样留下 `failed` 的 Action。处置建议按场景给：`query` 能切 `--load-mode stream`（整块解析峰值 ≈ 文件 × 13）；`convert` 没有开关可切，只能缩小输入（拆文件、裁列）或放宽预算——把 `--load-mode` 发给它不报错也不生效（CLI 会在 stderr 提示「已忽略」）。
 - 看到 stderr 的「载入 xxx.json（…，流式解析，预计需约 xx 内存）...」说明正在载入；若进程随后消失，就是内存不够。
+- 内存超出预算时看门狗会先打印「内存超出预算（本进程已用 xx，预算 xx），正在中止」，再以 `code: 4` 失败——不会静默卡住。显式 `--load-mode full` 时也是逐元素解码、可被中止，长文件不会再出现「几十秒没有任何输出」。
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
 - 性能结论有回归测试（环境/方式/结果见 `docs/PERFORMANCE.md`），随 `go test ./...` 执行：`TestPerfLoadModeMemoryRatio`（流式峰值须低于整块解析 1.3 倍以上）、`TestPerfConvertExcelMemory`（转换峰值不得超过预检倍率）。吞吐用 `make bench` 看，`DTOOL_BENCH_ROWS=N` 放大，`-short` 跳过这些回归。
 

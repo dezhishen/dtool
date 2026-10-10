@@ -65,7 +65,7 @@ dtool --max-memory 32K query --sql "SELECT COUNT(*) AS 行数 FROM orders"
 - 预算来源：`--max-memory` > cgroup > 系统可用内存，且只按 85% 计算。
 - `--load-mode` 只对 JSON 装入（`query`）有效，且对 JOIN 中**每个**数据源分别生效；`convert` 没有这个参数
   —— Excel 转换只有一个流式实现，要降内存只能缩小输入（拆文件、裁列）；传了不生效，CLI 会在 stderr 提示「已忽略」。
-- 确需强行运行时 `--max-memory 0` 关闭检查。
+- 确需强行运行时 `--max-memory 0` 关闭检查；真的超预算时，看门狗会先在 stderr 打印「内存超出预算（已用 xx，预算 xx），正在中止」，再以 `code: 4` 失败，不会静默卡住。
 - 1 核 2GB 下的实测数字与能力边界见 [docs/PERFORMANCE.md](../PERFORMANCE.md)。
 
 ## ★★ 沙箱：危险 SQL 会被拦

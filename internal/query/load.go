@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +45,10 @@ func ParseLoadMode(s string) (LoadMode, error) {
 		WithHint("可选：auto（按文件大小自适应）/ stream（流式，省内存）/ full（整块解析，快）")
 }
 
+// autoFullHeadroom 是 auto 模式选择整块解析时要求的最小余量（百分比）。
+// 估算倍率来自实测量级，擦着预算通过往往意味着加载中途被看门狗中止——宁可慢一点也走流式。
+const autoFullHeadroom = 80
+
 // resolveMode 决定单个数据源的装入方式：显式指定优先；auto 时文件够大、或整块解析放不下就改用流式。
 func resolveMode(mode string, size uint64, mem memguard.Memory) LoadMode {
 	if m, err := ParseLoadMode(mode); err == nil && m != LoadAuto {
@@ -52,10 +57,20 @@ func resolveMode(mode string, size uint64, mem memguard.Memory) LoadMode {
 	if size >= autoStreamSize {
 		return LoadStream
 	}
-	if mem.Available > 0 && size*fullPeakFactor > mem.Available {
+	if mem.Available > 0 && size*fullPeakFactor > mem.Available*autoFullHeadroom/100 {
 		return LoadStream
 	}
 	return LoadFull
+}
+
+// fullTight 判断整块解析的预计峰值是否逼近预算（超过 headroom 比例）。
+// 显式 --load-mode full 时用来提醒用户：这次很可能在中途被中止。
+func fullTight(size uint64, mem memguard.Memory) bool {
+	if mem.Available == 0 || size == 0 {
+		return false
+	}
+	need := size * fullPeakFactor
+	return need <= mem.Available && need > mem.Available*autoFullHeadroom/100
 }
 
 func peakFactor(m LoadMode) int {
@@ -344,15 +359,60 @@ func boolInt(b bool) int64 {
 	return 0
 }
 
+// decodeRows 为整块解析逐元素解码 JSON 数组。
+//
+// 内存特点与 json.Unmarshal 相同（所有行都驻留在内存里），但两点更好：
+//   - 每 4096 行检查一次 ctx，看门狗判定内存超预算时能及时中止，而不是等整个
+//     Unmarshal 跑完（GC 抖动下这可能要几十秒且毫无输出）；
+//   - 不再同时持有「文件原始字节 + 解码后的行」两份，峰值少一个文件大小。
+func decodeRows(ctx context.Context, r io.Reader, name string) ([]types.Row, error) {
+	dec := json.NewDecoder(r)
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: %v", name, err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return nil, types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: 应以 [ 开头", name)
+	}
+	var rows []types.Row
+	for i := 0; dec.More(); i++ {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		var row types.Row
+		if err := dec.Decode(&row); err != nil {
+			return nil, types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: %v", name, err)
+		}
+		rows = append(rows, row)
+	}
+	// 先消费数组的 ']'，再看后面还有没有内容：与 json.Unmarshal 一样严格，
+	// 避免把 `[...] [...]` 这种文件当成合法输入悄悄读进来。
+	if tok, err := dec.Token(); err != nil {
+		return nil, types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: %v", name, err)
+	} else if d, ok := tok.(json.Delim); !ok || d != ']' {
+		return nil, types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: 数组未正常结束", name)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: 数组结尾后有多余内容", name)
+		}
+		return nil, types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: %v", name, err)
+	}
+	return rows, nil
+}
+
 // loadFull 整块解析：读入整个文件并反序列化为行切片后再插入（快，但峰值内存约 13 倍文件大小）。
 func loadFull(ctx context.Context, db *sql.DB, b Binding) error {
-	data, err := os.ReadFile(b.Path)
+	f, err := os.Open(b.Path)
 	if err != nil {
 		return types.Errorf(types.CodeNotFound, "source not found: %s", b.Path)
 	}
-	var rows []types.Row
-	if err := json.Unmarshal(data, &rows); err != nil {
-		return types.Errorf(types.CodeExec, "source %s is not a JSON array of objects: %v", b.Name, err)
+	defer f.Close()
+	rows, err := decodeRows(ctx, bufio.NewReaderSize(f, 1<<20), b.Name)
+	if err != nil {
+		return err
 	}
 	var cols []string
 	seen := map[string]bool{}

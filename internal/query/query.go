@@ -68,6 +68,13 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 		return nil, err
 	}
 	if mem.Available > 0 {
+		for i, m := range modes {
+			if m == LoadFull && fullTight(memguard.SizeOf(binds[i].Path), mem) {
+				fmt.Fprintf(memguard.NoticeWriter,
+					"提示：%s 走整块解析，预计峰值已逼近预算（可用 %s），中途可能被中止；改用 --load-mode stream 更稳。\n",
+					filepath.Base(binds[i].Path), memguard.HumanSize(mem.Available))
+			}
+		}
 		// 软上限：接近预算时 GC 更积极，尽量不撞上 cgroup 硬限制
 		defer debug.SetMemoryLimit(-1)
 		debug.SetMemoryLimit(int64(mem.Available))
