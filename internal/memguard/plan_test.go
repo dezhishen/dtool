@@ -309,3 +309,31 @@ func TestChooseSkipsRungOverItsMaxInput(t *testing.T) {
 		t.Fatalf("要说明体积上限：%+v", p.Rejected)
 	}
 }
+
+// 没有预算（--max-memory 0 / 探测不到）时也必须尊重档位的**体积上限**：
+// 那条规则讲的是「峰值放大划不划算」，与有没有预算无关。曾经这里直接取 Candidates[0]，
+// 于是 `--max-memory 0` + 1GB 输入会挑「整块解析」（13× ≈ 14GB）→ 被内核 OOM 杀掉
+// （实测 rc=143，连错误 JSON 都来不及输出），而不是回落到流式档。
+func TestChooseWithoutBudgetStillRespectsMaxInput(t *testing.T) {
+	rungs := []Candidate{
+		{Name: "full+memory", Factor: 13, MaxInputSize: 32 * mib, RequireHeadroomPercent: 20},
+		{Name: "stream+memory", Factor: 2},
+		{Name: "stream+disk", Factor: 0.5},
+	}
+	// 探测不到预算（Threshold()==0）：1GB 输入不该挑整块解析
+	p, err := Choose(ChooseRequest{Size: 1 << 30, Candidates: rungs, Memory: Memory{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Chosen.Name != "stream+memory" {
+		t.Fatalf("无预算时也应跳过体积超限的档，实际选了 %s（%s）", p.Chosen.Name, p.Reason)
+	}
+	if !strings.Contains(p.Reason, "不划算") {
+		t.Fatalf("理由要说明为什么跳过整块解析：%q", p.Reason)
+	}
+	// 小输入照旧用最快档
+	p, _ = Choose(ChooseRequest{Size: 1 * mib, Candidates: rungs, Memory: Memory{}})
+	if p.Chosen.Name != "full+memory" {
+		t.Fatalf("小输入应仍用最快档，实际 %s", p.Chosen.Name)
+	}
+}

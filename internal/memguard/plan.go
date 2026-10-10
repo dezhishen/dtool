@@ -184,10 +184,25 @@ func Choose(r ChooseRequest) (Plan, error) {
 	}
 
 	var rejected []Rejected
-	// 预算未知（不检查）：没有依据可比，直接用最快的档。
+	// 预算未知（不检查）：没有依据可比对，取最快的档。但**体积上限必须照旧生效**：
+	// 它讲的是「峰值放大划不划算」，与有没有预算无关——1GB 输入做整块解析要 13GB 峰值，
+	// 那不是「更快」，是被内核 OOM 杀掉（实测：--max-memory 0 + 1.05GiB 输入 → rc=143、
+	// 连错误 JSON 都来不及输出）。
 	if r.Memory.Threshold() == 0 || r.Size == 0 {
-		p := r.plan(r.Candidates[0])
-		p.Reason = "无内存预算可比对，直接用最快档"
+		c := r.Candidates[0]
+		for _, cand := range r.Candidates {
+			if cand.MaxInputSize == 0 || r.Size <= cand.MaxInputSize {
+				c = cand
+				break
+			}
+		}
+		p := r.plan(c)
+		p.Reason = "无内存预算可比对，用最快档"
+		if c.Name != r.Candidates[0].Name {
+			p.Reason = fmt.Sprintf("无内存预算可比对；%s 的峰值是输入的 %d 倍（输入 %s ≥ 上限 %s）不划算，改用 %s",
+				r.Candidates[0].Name, int(r.Candidates[0].Factor), HumanSize(r.Size),
+				HumanSize(r.Candidates[0].MaxInputSize), c.Name)
+		}
 		p.Rejected = rejected
 		return p, nil
 	}
