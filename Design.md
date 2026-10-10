@@ -218,7 +218,7 @@
 ```
 started ──► running ──► success        退出码 0
                     ├─► failed         退出码 4（执行失败）/ 5（被 Ctrl+C、SIGTERM 中断）
-                    └─► stale          退出码 5：进程被强杀，事后由下一条命令或 actions sync 收敛
+                    └─► stale          退出码 5：进程被强杀，由看护进程（或下一条命令 / actions sync）收敛
 ```
 
 - **started**：命令开始执行时立即写入 Action 文件（`status: "running"`）。
@@ -233,8 +233,15 @@ started ──► running ──► success        退出码 0
   `error.code=5`（interrupted），消息写明阶段（「已中断：载入阶段未完成（收到 Ctrl+C / SIGTERM）」），
   并附 `hint`「重跑该命令即可」。转换（`convert`）与 JSON 装入（`query`）都在行循环里检查 ctx，
   所以 Ctrl+C 立刻生效，不会「按了没反应、等整表转完」。
-- 强杀（SIGKILL / OOM / 断电）无法捕获：状态停在 `running`，由下一次命令或 `actions sync`
-  收敛为 `stale`，`error.code` 同样是 `5`（中断），只是发现得晚。
+- 强杀（SIGKILL / TerminateProcess / OOM / 断电）无法捕获：状态停在 `running`。为此每条命令启动时
+  会拉起一个**看护进程**（`dtool __reap --workspace <ws> --pid <父 pid>`）：它只轮询父进程是否还在，
+  父进程一消失就调一次 `Recorder.Sync`，把遗留的 `running` 落盘为 `stale`（`error.code=5`），
+  因此**无需再跑任何命令**状态就会自愈（实测 ~0.25s）。进程内的任何补偿代码在强杀时都来不及跑，
+  这是必须另起进程的原因。
+  - 成本：一次 `exec` 自身 + 每 250ms 一次 `pidAlive`；最多活 24h，父进程正常结束就立刻退出。
+  - 开关：`DTOOL_NO_REAPER=1`（受限沙箱不允许起子进程）、或 `--no-record`（没有 Action 要收敛）。
+  - 局限：整组被杀（`TerminateJobObject`）、机器断电、或用户手动删掉看护进程时，仍退回
+    「下一条命令入口 / `actions sync` 收敛为 `stale`」这条兜底路径。
 
 ### 4.5 Action 索引
 

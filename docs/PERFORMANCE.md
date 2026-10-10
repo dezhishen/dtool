@@ -186,6 +186,8 @@ need > 可用内存 → 转换/查询前直接以 rc=4 失败并给出数字
   内存超预算时能及时中止。
 - 用量口径按**工作集/RSS**，不是 Go 堆：modernc/SQLite 的页缓存是 mmap/VirtualAlloc 出来的，
   `debug.SetMemoryLimit` 管不到它，只有预检 + 看门狗能提前拦住。
+- Windows 的用量口径是**私有提交量**（commit charge，`GetProcessMemoryInfo` 的 `PagefileUsage`）而不是
+  工作集：`JOB_OBJECT_LIMIT_PROCESS_MEMORY` 限的就是提交量，按工作集看会等到提交顶满才报错。
 - 平台探测：Linux 用 cgroup v2/v1 + 系统可用内存；Windows 用 Job Object 进程内存上限 + 系统可用内存；
   其他平台需显式 `--max-memory`。预算为零等于不做检查，此时顶到硬上限的表现可能是结构化错误
   （SQLite `out of memory (7)`，会被翻译成带 hint 的 code 4），也可能是 Go runtime 的

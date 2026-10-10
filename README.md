@@ -23,6 +23,9 @@ dtool actions list --limit 5
 
 导出：`query --format csv|markdown|table|json|xlsx --output <文件>`（xlsx 需 `--output`）；`visualize --type bar|line|pie --format png|svg` 出图；`visualize --type table --format md|xlsx` 导出表格。
 
+进程被强杀（SIGKILL / 被 OOM 杀）时，dtool 起的看护进程会在约 0.25s 内把这次命令遗留的 Action
+收敛为 `stale`（`error.code=5`，说明「进程已消失、结果未知」），无需再跑命令；`DTOOL_NO_REAPER=1` 可关闭。
+
 目录：`.dtool/datasets/<name>/`（数据集，独立于 Action；同名重新转换会覆盖数据与 Schema 并刷新更新日期；Schema 必有）、`.dtool/outputs/queries/<id>/`、`.dtool/outputs/charts/<id>/`、`.dtool/actions/`。
 
 SQL 表名：用 `--source 别名=引用`，或用**双引号**包裹文件路径（单引号无效）。数值列按整列推断类型，`WHERE`/`ORDER BY` 按数值比较。

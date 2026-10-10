@@ -69,7 +69,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y；y 必须是数值列 |
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
-| `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，下次命令启动时会落盘收敛，见下） |
+| `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，会在 ~0.25s 内被看护进程落盘收敛，见下） |
 | `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
 | `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身，见文末 |
 
@@ -177,6 +177,12 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
 - `--timeout` 只约束**查询阶段**（默认 60s），载入耗时不计入。若内存充足、只想要速度，可用 `--load-mode full`（只解析一遍，更快）。
 - 内存不足时会**快速失败并说明原因**（含「预计需 xx、可用 xx」与 `--max-memory 0` 退出口），不会静默被杀；这类失败同样留下 `failed` 的 Action。处置建议按场景给：`query` 能切 `--load-mode stream`（整块解析峰值 ≈ 文件 × 13）；`convert` 没有开关可切，只能缩小输入（拆文件、裁列）或放宽预算——把 `--load-mode` 发给它不报错也不生效（CLI 会在 stderr 提示「已忽略」）。
 - 看到 stderr 的「载入 xxx.json（…，流式解析，预计需约 xx 内存）...」说明正在载入；若进程随后消失，就是内存不够。
+- 强杀（SIGKILL / TerminateProcess / 被 OOM 杀）后，dtool 启动的**看护进程**会在约 0.25s 内把
+  这次命令遗留的 `running` 收敛为 `stale`（附原因、`code: 5`），无需再跑任何命令；
+  `DTOOL_NO_REAPER=1` 可关闭（受限沙箱不允许起子进程时），此时退回「下一条命令或 `actions sync` 收敛」。
+  整组被杀（如 `TerminateJobObject`）或断电时看护进程也会一起死，同样退回那条兜底路径。
+- Windows 上的预检与看门狗按**提交量**（commit charge）判定，因为 Job Object 的进程内存上限
+  本身就是提交上限；Linux 仍按 RSS。
 - 内存超出预算时看门狗会先打印「内存超出预算（本进程已用 xx，预算 xx），正在中止」，再以 `code: 4` 失败——不会静默卡住。显式 `--load-mode full` 时也是逐元素解码、可被中止，长文件不会再出现「几十秒没有任何输出」。
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
 - 预算来源随平台不同：Linux 读 cgroup/系统可用内存，Windows 读 **Job Object 进程内存上限**（存在即生效），
