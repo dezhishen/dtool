@@ -17,7 +17,7 @@ description: 本地数据 Pipeline CLI。用于把 Excel 转成可复用的数�
 | Windows | `dtool_<版本>_windows_<arch>.zip`（内含 `dtool.exe`） |
 
 ```bash
-V=v0.1.0                                             # 最新版本；预览版形如 v0.1.0-preview.2
+V=v0.2.0                                             # 最新版本；预览版形如 v0.2.0-preview.2
 # 自动取最新正式版：V=$(curl -sSL https://api.github.com/repos/dezhishen/dtool/releases/latest \
 #   | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)   # 含预览版用 /releases（列表第一项）
 base=https://github.com/dezhishen/dtool/releases/download/$V
