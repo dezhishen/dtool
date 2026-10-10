@@ -1,5 +1,5 @@
 BINARY    := dtool
-VERSION   ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
+VERSION   ?= $(shell bash scripts/version.sh) # 排除滚动 dev tag，见脚本注释
 VER       := $(VERSION:v%=%)
 PLATFORMS := linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 windows-arm64
 # 版本与元数据（commit/分支/构建时间/CI 运行…）由 scripts/ldflags.sh 统一生成

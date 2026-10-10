@@ -34,11 +34,17 @@ fi
 
 # 上一个对比基线：预览版取最近的任意 tag；正式版/补丁版取最近的非预览 tag，
 # 因此正式版的说明会汇总整个预览期的改动。
+#
+# 两种 tag 必须排除：
+#   dev / dev-*  ——滚动 dev 发布每次构建都移动，比任何版本 tag 都近；不排除的话
+#                   prev 会变成移动的 "dev"，发版说明既没意义也不可复现（实测复现过）
+#   *-preview.*  ——正式版/补丁版要汇总整个预览期，基线应落到上一个正式版
 prev=""
+exclude=(--exclude 'dev' --exclude 'dev-*')
 if [[ "$kind" == preview ]]; then
-  prev="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+  prev="$(git describe --tags --abbrev=0 "${exclude[@]}" "${tag}^" 2>/dev/null || true)"
 else
-  prev="$(git describe --tags --abbrev=0 --exclude '*-preview.*' "${tag}^" 2>/dev/null || true)"
+  prev="$(git describe --tags --abbrev=0 "${exclude[@]}" --exclude '*-preview.*' "${tag}^" 2>/dev/null || true)"
 fi
 
 echo "kind=${kind}"

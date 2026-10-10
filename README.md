@@ -263,6 +263,11 @@ dev 发布是**滚动**的（固定 tag `dev`，每次 main 构建覆盖同名�
 Release，也不需要额外的清理策略。**只保留最新一次**：想装某次特定构建的制品，用那一次
 workflow 的 artifact（`gh run download <run id> --name dtool-dev-<run id>`，14 天）。
 
+`dev` 是**移动 tag**（每次构建都落到 main 最新提交），因此它被显式排除在「版本号」与「发版
+对比基线」的计算之外（`scripts/version.sh`、`scripts/release-info.sh`）：否则本地构建会变成
+`dev`/`dev-1-g<sha>`（被误认为 dev 渠道构建），发版说明的基线也会退化成移动的 `dev`。
+`scripts/tests/dev-tag-hygiene.test.sh` 用「dev 比版本 tag 更近」的恶意布局守住这条。
+
 发布时机（`.github/workflows/dev-release.yml`）：push main 时立刻发；此外**每 4 小时**定时兜底，
 也支持在 Actions 页面**手动触发**（`force=true` 可忽略缓存强制重发）。三种触发都会先比对
 `dev` 发布里 `dev-build.txt` 记录的 commit——**commit 没变就跳过**，不重复构建、不滚动构建号。

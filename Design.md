@@ -984,7 +984,15 @@ dev 构建之间没有版本序，硬比大小会出现「装完又说有新版�
 **触发与去重**（`.github/workflows/dev-release.yml`）：push main、每 4 小时定时、手动触发
 （`force` 可强制）。三者都先跑 `scripts/dev-release-decision.sh`：把 `dev-build.txt` 里的 commit
 与当前 commit 比对，相同就跳过构建与上传——定时触发十有八九命中这条，省掉无意义的构建与
-构建号滚动，也让「dev 构建号」只在 main 真的前进时才变。**只保留最新一次**是刻意的：
+构建号滚动，也让「dev 构建号」只在 main 真的前进时才变。**滚动 tag 的卫生问题**（容易踩）：`dev` 是**移动 tag**，每次都落在 main 最新提交上，而
+`git describe` 挑「最近的 tag」——不排除它就会污染两处：本地构建版本变成 `dev` 或
+`dev-1-g<sha>`（后者会被 `buildinfo.Channel` 认定成 dev 渠道构建），发版说明的对比基线退化成
+移动的 `dev`（内容无意义、不可复现）。因此 `scripts/version.sh`（Makefile 的 VERSION 默认值）与
+`scripts/release-info.sh`（prev 基线）都显式 `--exclude dev --exclude 'dev-*'`，
+`scripts/tests/dev-tag-hygiene.test.sh` 用「dev 比版本 tag 更近」的恶意布局 + 清理候选集三处断言
+把它钉住。预览版清理本来只匹配 `v*-preview.*`，天然安全。
+
+**只保留最新一次**是刻意的：
 dev 是「临时构建」，需要长期或可复现的构建请用 preview/stable；要装某次特定构建，
 用那一次的 workflow artifact（14 天）。
 

@@ -271,6 +271,7 @@ dtool upgrade --version 1.2.0          # 指定版本（可降级）；预览版
 想升到 dev：`dtool upgrade --channel dev`；`--version dev` 也可以（滚动发布**只保留最新一次**，
 `--version dev-<历史 run id>` 会被拒绝——要装特定构建请用那次 workflow 的 artifact）。
 dev 构建由 CI 在 push main / 每 4 小时定时 / 手动触发时更新，commit 未变则跳过。
+`dev` 是移动 tag，已在版本号与发版基线计算中排除——本地构建不会因此变成 dev 渠道。
 `--version` 与 `--pre` 不能同时使用；`--version` 与 `--channel` 也不能同时使用。Windows 下运行中的 `dtool.exe` 会被改名为 `.old`，新文件改名就位，下次启动自动清理；若提示文件被占用，请关闭其他 dtool 进程后重试。无写权限时在 Linux/macOS 用 `sudo`，Windows 用管理员。GitHub 限流时设置 `GITHUB_TOKEN`。
 
 网络瞬断（`EOF` / `connection reset` / 5xx / 429）会自动重试 3 次，间隔指数退避（500ms → 1s → 2s，上限 10s）；仍失败时错误 JSON 的 `error` 会写明「已尝试 N 次」，`hint` 里给出 `https://github.com/dezhishen/dtool/releases`——**AI Agent 遇到这种情况不必反复重试命令**，直接把 Release 资产下载地址告诉用户即可。
