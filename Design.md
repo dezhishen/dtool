@@ -981,6 +981,13 @@ dev 构建之间没有版本序，硬比大小会出现「装完又说有新版�
 前者为了覆盖上传，后者交给 `dev-build.txt`——改名后必须**重算 checksums.txt**
 （升级端按资产名查哈希），这段逻辑落在 `scripts/dev-release-assets.sh` 并有单测。
 
+**触发与去重**（`.github/workflows/dev-release.yml`）：push main、每 4 小时定时、手动触发
+（`force` 可强制）。三者都先跑 `scripts/dev-release-decision.sh`：把 `dev-build.txt` 里的 commit
+与当前 commit 比对，相同就跳过构建与上传——定时触发十有八九命中这条，省掉无意义的构建与
+构建号滚动，也让「dev 构建号」只在 main 真的前进时才变。**只保留最新一次**是刻意的：
+dev 是「临时构建」，需要长期或可复现的构建请用 preview/stable；要装某次特定构建，
+用那一次的 workflow artifact（14 天）。
+
 **操作者可强行指定**：`--load-mode`（`full`/`stream`）与 `--store`（`memory`/`disk`）
 两个正交开关；都留 `auto` 时走阶梯。只剩一档时视为强制（理由里写明「操作者指定」），
 强制档即使预计会崩也会执行——排查需要，且失败会被完整记录。

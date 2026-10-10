@@ -260,7 +260,12 @@ dtool upgrade --version dev                     # dev 构建也可显式指定�
 它比的是**构建身份**——发布里的 `dev-build.txt` 记着当前构建号，和二进制里的
 `version`/`build_id` 一致就认为已是最新，不会因为「版本号看起来更小」而反复重装或降级。
 dev 发布是**滚动**的（固定 tag `dev`，每次 main 构建覆盖同名资产），因此不会堆出成百上千个
-Release，也不需要额外的清理策略。
+Release，也不需要额外的清理策略。**只保留最新一次**：想装某次特定构建的制品，用那一次
+workflow 的 artifact（`gh run download <run id> --name dtool-dev-<run id>`，14 天）。
+
+发布时机（`.github/workflows/dev-release.yml`）：push main 时立刻发；此外**每 4 小时**定时兜底，
+也支持在 Actions 页面**手动触发**（`force=true` 可忽略缓存强制重发）。三种触发都会先比对
+`dev` 发布里 `dev-build.txt` 记录的 commit——**commit 没变就跳过**，不重复构建、不滚动构建号。
 
 升级前会校验 Release 中 `checksums.txt` 的 sha256，并先运行新二进制自检；任何一步失败都不会改动现有文件。Windows 下运行中的 exe 不能覆盖，因此先把旧文件改名为 `.old` 再让新文件就位（失败回滚，`.old` 下次启动自动清理）。GitHub 限流时设置 `GITHUB_TOKEN`；`DTOOL_REPO` / `DTOOL_UPDATE_API` 可指向镜像。
 

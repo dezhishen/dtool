@@ -1,0 +1,131 @@
+name: Dev Release
+
+# dev 是**滚动发布**（固定 tag `dev`，资产每次覆盖），三种触发方式：
+#   push      main 有新提交时立刻发（最常见的路径）
+#   schedule  每 4 小时兜底一次（cron 为 UTC）：catch 漏掉的构建，也让 dev 与 main 保持同步
+#   dispatch  手动触发，可 force=true 强制重发（例如资产损坏、或想固定一个构建号）
+#
+# 三种触发都先做 **commit 校验**：dev-build.txt 里记着上次发布的 commit，与当前一致就跳过
+# 构建与上传（定时触发十有八九命中这条），避免无意义地滚动构建号、刷 Release 时间。
+# 之所以能这么省：dev 的语义是「main 的最新状态」，commit 没变就没有新东西可发。
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 */4 * * *" # 每 4 小时（UTC）
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 忽略 commit 校验，强制重新发布
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # 更新滚动 dev 发布
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: false # 发布要串行，不能互相打断（否则可能出现半覆盖的资产）
+
+jobs:
+  dev-release:
+    runs-on: ubuntu-26.04
+    env:
+      CGO_ENABLED: "0"
+      GH_TOKEN: ${{ github.token }}
+      DEV_VERSION: dev-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # ldflags 里的 git describe 需要 tag 与历史
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: 取现有 dev 发布里的构建记录
+        id: current
+        run: |
+          set -euo pipefail
+          mkdir -p .dev-current
+          if gh release download dev --pattern dev-build.txt --dir .dev-current --clobber 2>/dev/null; then
+            echo "已有 dev 构建记录："; cat .dev-current/dev-build.txt
+            echo "file=.dev-current/dev-build.txt" >> "$GITHUB_OUTPUT"
+          else
+            echo "尚无 dev 发布（或读不到记录）"
+            echo "file=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 校验 commit 是否变化（决定要不要重复发布）
+        id: decide
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          args=("$GITHUB_SHA")
+          [[ -n "${{ steps.current.outputs.file }}" ]] && args+=("${{ steps.current.outputs.file }}")
+          [[ "$FORCE" == "true" ]] && args+=(--force)
+          bash scripts/dev-release-decision.sh "${args[@]}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: 测试
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          go test ./...
+          make scripts-test
+
+      - name: 构建全部平台
+        if: steps.decide.outputs.release == 'true'
+        run: make release-build VERSION="$DEV_VERSION"
+
+      - name: 冒烟：校验嵌入的版本与元数据
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/smoke && tar -xzf "dist/dtool_${DEV_VERSION}_linux_amd64.tar.gz" -C /tmp/smoke
+          out="$(/tmp/smoke/dtool version)"
+          echo "$out"
+          grep -q "\"version\": \"${DEV_VERSION}\"" <<<"$out"
+          grep -q "\"channel\": \"dev\"" <<<"$out"
+          grep -q "\"commit\": \"${GITHUB_SHA}\"" <<<"$out"
+          grep -q "\"build_id\": \"${GITHUB_RUN_ID}\"" <<<"$out"
+          grep -q "\"builder\": \"github-actions\"" <<<"$out"
+          /tmp/smoke/dtool --version | grep -q "${DEV_VERSION}"
+
+      # artifact 在**改名之前**上传：里面的文件名带 run id，下载多次不会撞名，
+      # 也便于「按某次 action 的制品离线安装」（只保留 dev 一个 Release 时的兜底路径）。
+      - uses: actions/upload-artifact@v7
+        if: steps.decide.outputs.release == 'true'
+        with:
+          name: dtool-${{ env.DEV_VERSION }}
+          path: dist/dtool_*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 整理成滚动 dev 发布的资产
+        if: steps.decide.outputs.release == 'true'
+        # 逻辑在 scripts/dev-release-assets.sh（单测：scripts/tests/dev-release-assets.test.sh）
+        run: BUILD_ID="$GITHUB_RUN_ID" COMMIT="$GITHUB_SHA" bash scripts/dev-release-assets.sh dist "$DEV_VERSION"
+
+      - name: 更新滚动 dev 发布（tag dev）
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          notes="$(printf 'main 的最新构建（滚动发布：资产每次构建覆盖，只保留最新一次）\n\n- 版本: %s\n- commit: %s\n- 构建: %s/actions/runs/%s\n- 触发: %s\n' \\
+            "$DEV_VERSION" "$GITHUB_SHA" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME")"
+          if ! gh release view dev >/dev/null 2>&1; then
+            gh release create dev --prerelease --latest=false --title "$DEV_VERSION" --notes "$notes"
+          fi
+          gh release edit dev --title "$DEV_VERSION" --notes "$notes"
+          gh release upload dev dist/* --clobber
+          gh release view dev --json tagName,name,assets --jq '.tagName, .name, (.assets[].name)'
+
+      - name: 汇总
+        run: |
+          {
+            echo "### dev 发布"
+            echo ""
+            echo "- 触发：\`$GITHUB_EVENT_NAME\`"
+            echo "- commit：\`$GITHUB_SHA\`"
+            echo "- 决策：${{ steps.decide.outputs.reason }}"
+            echo "- 发布：${{ steps.decide.outputs.release }}"
+          } >> "$GITHUB_STEP_SUMMARY"
