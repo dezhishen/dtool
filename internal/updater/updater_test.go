@@ -679,7 +679,7 @@ func TestCheckDevChannel(t *testing.T) {
 	if res.Channel != "dev" || res.Latest != "dev-38043572835" || res.UpdateAvailable {
 		t.Fatalf("同一构建不该报可升级：%+v", res)
 	}
-	if !strings.Contains(res.Hint, "最新 dev 构建") {
+	if !strings.Contains(res.Hint, "已是 dev 发布里的最新构建") {
 		t.Fatalf("提示要说明已是最新：%q", res.Hint)
 	}
 

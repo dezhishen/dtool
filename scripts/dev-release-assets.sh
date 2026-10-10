@@ -3,7 +3,7 @@
 #   dtool_dev-<run id>_<os>_<arch>.<ext>  →  dtool_dev_<os>_<arch>.<ext>
 # 并重算 checksums.txt、写出 dev-build.txt（构建号的权威来源）。
 #
-# 为什么资产名要固定：`dtool upgrade --channel dev` 的目标是「main 的最新构建」，
+# 为什么资产名要固定：`dtool upgrade --channel dev` 的目标是「main 的最近一次构建」，
 # 每次都覆盖同名资产即可，不必按次建 tag/Release（也就没有清理负担）。
 # 为什么改名后必须重算 checksums：升级端是按**资产名**去 checksums.txt 里找哈希的。
 #

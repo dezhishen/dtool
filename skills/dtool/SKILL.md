@@ -273,7 +273,7 @@ harness 若用 `CreateJobObjectW` + `AssignProcessToJobObject` 做沙箱，先�
 ```bash
 dtool --update            # 只检查，返回 {current, channel, latest, update_available, release_url}
 dtool --update --pre      # 同时考虑预览版（等价于 --channel preview）
-dtool --update --channel dev   # main 的最新构建（滚动发布）
+dtool --update --channel dev   # main 的定时构建（每 4 小时；滚动发布只留最新一次）
 dtool upgrade             # 升级到最新正式版（先校验 sha256，再替换）
 dtool upgrade --pre       # 允许最新预览版
 dtool upgrade --version 1.2.0          # 指定版本（可降级）；预览版写 1.2.0-preview.1
@@ -282,7 +282,7 @@ dtool upgrade --skills=~/.dtool   # 或指定目录 / 文件：--skills=docs/ �
 dtool upgrade --skills=~/.claude/skills/dtool/SKILL.md   # 直接装成平台技能包
 ```
 
-渠道三选一：`stable`（默认）/ `preview`（`--pre`）/ `dev`（main 的最新构建）。
+渠道三选一：`stable`（默认）/ `preview`（`--pre`）/ `dev`（main 的定时构建，最多滞后 4 小时）。
 `dev` 渠道比的是**构建身份**而不是版本大小（`dev-<run id>` 不是语义化版本）：发布里的
 `dev-build.txt` 是构建号的权威来源，和本地 `version`/`build_id` 一致就是「已是最新」。
 想升到 dev：`dtool upgrade --channel dev`；`--version dev` 也可以（滚动发布**只保留最新一次**，

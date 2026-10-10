@@ -376,9 +376,9 @@ func (u *Updater) CheckChannel(ctx context.Context, ch Channel) (*CheckResult, e
 	if t.channel == ChannelDev {
 		res.UpdateAvailable = !u.sameBuild(t)
 		if res.UpdateAvailable {
-			res.Hint = "运行 `dtool upgrade --channel dev` 升级到 main 的最新构建"
+			res.Hint = "运行 `dtool upgrade --channel dev` 升级到 dev 发布里的最新构建"
 		} else {
-			res.Hint = "已是 main 的最新 dev 构建"
+			res.Hint = "已是 dev 发布里的最新构建"
 		}
 		return res, nil
 	}
@@ -675,7 +675,7 @@ func (u *Updater) Upgrade(ctx context.Context, o UpgradeOptions) (*UpgradeResult
 		ReleaseURL: rel.HTMLURL}
 	if t.channel == ChannelDev {
 		if u.sameBuild(t) {
-			res.Message = "已是 main 的最新 dev 构建，无需升级"
+			res.Message = "已是 dev 发布里的最新构建，无需升级"
 			return u.skillsOnly(ctx, rel, t, res, o)
 		}
 	} else if cur, ok := u.current(); ok {

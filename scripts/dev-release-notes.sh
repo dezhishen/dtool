@@ -14,7 +14,7 @@ run_url="${3:-}"
 event="${4:-unknown}"
 
 cat <<EOF
-main 的最新构建（滚动发布：资产每次构建覆盖，只保留最新一次）
+main 的定时构建（每 4 小时一次；滚动发布：资产每次构建覆盖，只保留最新一次）
 
 - 版本: ${version}
 - commit: ${commit}

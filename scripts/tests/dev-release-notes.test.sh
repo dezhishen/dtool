@@ -7,7 +7,7 @@ out="$(bash scripts/dev-release-notes.sh dev-38046361651 abc123def456 https://gi
 fail=0
 assert() { if ! eval "$2"; then echo "FAIL: $1" >&2; fail=1; fi; }
 
-assert "标题行" "grep -q '^main 的最新构建（滚动发布' <<<\"\$out\""
+assert "标题行" "grep -q '^main 的定时构建（每 4 小时' <<<\"\$out\""
 assert "版本" "grep -q '^- 版本: dev-38046361651$' <<<\"\$out\""
 assert "commit" "grep -q '^- commit: abc123def456$' <<<\"\$out\""
 assert "构建链接" "grep -q '^- 构建: https://github.com/o/r/actions/runs/1$' <<<\"\$out\""

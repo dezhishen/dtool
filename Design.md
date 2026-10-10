@@ -544,7 +544,8 @@ dtool query --sql ... --update          # 查询前先检查更新（内置同�
 ```
 
 渠道：`stable`（默认，最新正式版）/ `preview`（正式版 + 预览版，等价于旧的 `--pre`）/
-`dev`（`main` 的最新构建，滚动发布到 tag `dev`，比的是构建号而不是版本号大小）。
+`dev`（**`main` 的定时构建**：CI 每 4 小时或手动触发一次，滚动发布到 tag `dev`；因此最多比
+`main` 落后 4 小时。比的是构建号而不是版本号大小）。
 `--version` 可指定任意历史版本（含降级）；dev 构建写 `--version dev` 或 `--version dev-<run id>`，
 但 dev 渠道只保留最新一次构建。网络瞬断按指数退避重试 3 次，失败时 `hint` 给出 Releases 页面，见 8.4.3。
 

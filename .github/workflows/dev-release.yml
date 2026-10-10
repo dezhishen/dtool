@@ -11,7 +11,7 @@ name: Dev Release
 #
 # 两种触发都先做 **commit 校验**：dev-build.txt 里记着上次发布的 commit，与当前一致就跳过
 # 构建与上传（定时触发十有八九命中这条），避免无意义地滚动构建号、刷 Release 时间。
-# 之所以能这么省：dev 的语义是「main 的最新状态」，commit 没变就没有新东西可发。
+# 之所以能这么省：dev 的语义是「main 的最近一次构建」，commit 没变就没有新东西可发。
 on:
   schedule:
     - cron: "0 */4 * * *" # 每 4 小时（UTC）

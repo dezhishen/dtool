@@ -58,7 +58,8 @@ func newUpgradeCmd(version string) *cobra.Command {
 
   stable   最新正式版（默认）
   preview  正式版 + 预览版（vX.Y.0-preview.N），等价于旧的 --pre
-  dev      main 的最新构建（滚动发布 tag "dev"，比的是构建号而不是版本大小）
+  dev      main 的定时构建（每 4 小时一次，最多滞后 4 小时；滚动发布 tag "dev"，
+           比的是构建号而不是版本大小）
 
 ` + "`--version`" + ` 可指定任意历史版本（可降级）；dev 构建写 ` + "`--version dev`" + ` 或
 ` + "`--version dev-<run id>`" + `，但 dev 渠道只保留最新一次构建。

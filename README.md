@@ -82,7 +82,8 @@ dtool version --deps       # 附带编译进二进制的依赖模块及版本
 
 **main 分支的测试构建**：CI 在**每 4 小时**定时构建全部平台（也可在 Actions 页面手动触发），版本号为
 `dev-<Actions run id>`，并**滚动发布**到固定 tag `dev`（同名资产每次覆盖，只保留最新一次）。
-所以 `dtool upgrade --channel dev` 装的就是它；`stable` / `preview` 两个渠道完全看不到 dev 构建。
+所以 `dtool upgrade --channel dev` 装的就是它（**最多比 main 落后 4 小时**，想立刻要就手动触发
+一次）；`stable` / `preview` 两个渠道完全看不到 dev 构建。
 每次构建同时留一份 workflow artifact（`dtool-dev-<run id>`，14 天），`dtool version` 里的 `build_url`
 可直接跳转到对应的运行记录。
 
@@ -263,7 +264,7 @@ Windows 上若 Job Object 只置了标志位、值读回 0（`job_object.limit_u
 |---|---|---|
 | `stable`（默认） | 最新正式版 / 补丁版 | `dtool upgrade` |
 | `preview` | 正式版 + 预览版（`vX.Y.0-preview.N`） | `dtool upgrade --channel preview`（或 `--pre`） |
-| `dev` | **main 的最新构建**（滚动发布） | `dtool upgrade --channel dev` |
+| `dev` | **main 的定时构建**（每 4 小时一次，最多滞后 4 小时；滚动发布只留最新一次） | `dtool upgrade --channel dev` |
 
 ```bash
 dtool --update [--channel stable|preview|dev]   # 只检查，不改动任何文件

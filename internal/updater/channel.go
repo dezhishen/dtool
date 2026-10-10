@@ -14,7 +14,8 @@ import (
 //	preview 正式版 + 预览版（vX.Y.0-preview.N）
 //	dev     **滚动** dev 发布（固定 tag `dev`，每次 main 构建覆盖其资产）
 //
-// dev 渠道是滚动的原因：dev 构建是「main 的最新状态」，按次建 tag 会堆出成百上千个
+// dev 渠道是滚动的原因：dev 构建是「main 在某个时间点的快照」（CI 每 4 小时定时或手动触发
+// 一次），按次建 tag 会堆出成百上千个
 // 发布，还得额外做清理策略；固定一个 tag、每次 `--clobber` 替换资产，语义就是
 // 「当前 main 的构建」，也正好和 `dtool upgrade --channel dev` 的预期一致。
 type Channel string
@@ -42,7 +43,7 @@ func ParseChannel(s string) (Channel, error) {
 		return ChannelDev, nil
 	}
 	return "", types.Errorf(types.CodeUsage, "invalid channel %q", s).
-		WithHint("可选：stable（最新正式版）/ preview（含预览版）/ dev（main 的最新构建）")
+		WithHint("可选：stable（最新正式版）/ preview（含预览版）/ dev（main 的定时构建，最多滞后 4 小时）")
 }
 
 // pre 返回该渠道是否包含预览版（stable/preview 走版本比较时用）。
