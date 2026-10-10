@@ -114,10 +114,13 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 			size := memguard.SizeOf(p.Input)
 			mem := memguard.Budget(e.MaxMemory)
 			need := xlsxNeed(size)
-			if err := memguard.CheckNeed("Excel 文件", size, need,
+			checkErr := memguard.CheckNeed("Excel 文件", size, need,
 				fmt.Sprintf("%.0fMB 固定开销 + 文件 × %d 的流式估算", float64(xlsxBaseOverhead)/(1<<20), xlsxPeakFactor),
-				mem, memguard.HintSplitInput); err != nil {
-				return nil, err
+				mem, memguard.HintSplitInput)
+			memguard.Debugf("Excel %s（%s）：%s；预计需 %s；预检=%s", filepath.Base(p.Input),
+				memguard.HumanSize(size), mem.Describe(), memguard.HumanSize(need), memguard.Verdict(checkErr))
+			if checkErr != nil {
+				return nil, checkErr
 			}
 			memguard.Progress(os.Stderr, memguard.DefaultProgressMinSize, filepath.Base(p.Input), size, need, "流式解析 xlsx")
 			stage, err := ds.NewStaging()

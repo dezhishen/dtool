@@ -17,3 +17,6 @@ func Detect() Memory {
 }
 
 func CurrentUsage() uint64 { return RuntimeUsage() }
+
+// JobProbe 在非 Windows 平台没有 Job Object 可查，返回空值（字段含义见 JobInfo）。
+func JobProbe() JobInfo { return JobInfo{Note: "该平台没有 Job Object（Linux 用 cgroup）"} }

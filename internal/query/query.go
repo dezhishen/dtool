@@ -64,8 +64,12 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 		total += size
 		need += size * uint64(peakFactor(modes[i]))
 	}
-	if err := memguard.CheckNeed("数据源", total, need, estimateNote(modes), mem, memguard.HintLoadMode); err != nil {
-		return nil, err
+	checkErr := memguard.CheckNeed("数据源", total, need, estimateNote(modes), mem, memguard.HintLoadMode)
+	memguard.Debugf("%s；数据源 %d 个共 %s，装入方式=%s，预计需 %s；预检=%s", mem.Describe(),
+		len(binds), memguard.HumanSize(total), modeNotes(modes), memguard.HumanSize(need),
+		memguard.Verdict(checkErr))
+	if checkErr != nil {
+		return nil, checkErr
 	}
 	if mem.Available > 0 {
 		for i, m := range modes {
@@ -81,6 +85,8 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 	}
 	ctx, stopWatch := memguard.Watch(ctx, mem.Available)
 	defer stopWatch()
+	memguard.Debugf("看门狗=%s（阈值 %s）；Go 堆软上限=%s", onOff(mem.Available > 0),
+		memguard.HumanSize(mem.Available), onOff(mem.Available > 0))
 
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -164,6 +170,26 @@ func sqliteNOMEM(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "out of memory") || strings.Contains(msg, "sqlite_nomem")
+}
+
+func onOff(b bool) string {
+	if b {
+		return "开"
+	}
+	return "关"
+}
+
+// modeNotes 把各数据源的装入方式拼成一行（配合 Debugf 使用）。
+func modeNotes(modes []LoadMode) string {
+	seen := map[LoadMode]bool{}
+	var out []string
+	for _, m := range modes {
+		if !seen[m] {
+			seen[m] = true
+			out = append(out, string(m))
+		}
+	}
+	return strings.Join(out, "/")
 }
 
 // phaseLabel 把内部阶段名翻成用户看得懂的词。

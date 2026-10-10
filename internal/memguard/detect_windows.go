@@ -3,6 +3,7 @@
 package memguard
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 	"unsafe"
@@ -49,19 +50,40 @@ type processMemoryCounters struct {
 	PeakPagefileUsage          uintptr
 }
 
-// jobProcessMemoryLimit 返回当前进程所在 Job Object 的进程内存上限（未设置则为 0）。
-func jobProcessMemoryLimit() (uint64, bool) {
+// jobLimit 读取当前进程所在 Job Object 的上限，并留下**原始证据**（供 meminfo 排查）。
+func jobLimit() (JobInfo, uint64, string) {
+	var info JobInfo
 	var inJob int32
-	if r, _, _ := procIsProcessInJob.Call(0, 0, uintptr(unsafe.Pointer(&inJob))); r == 0 || inJob == 0 {
-		return 0, false
+	if r, _, _ := procIsProcessInJob.Call(0, 0, uintptr(unsafe.Pointer(&inJob))); r == 0 {
+		info.Note = "IsProcessInJob 调用失败"
+		return info, 0, ""
 	}
-	var info jobObjectExtendedLimitInformation
-	r, _, _ := procQueryInformationJobObject.Call(0, jobObjectExtendedLimitInformationClass,
-		uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info), 0)
-	if r == 0 || info.BasicLimitInformation.LimitFlags&jobObjectLimitProcessMemory == 0 {
-		return 0, false
+	info.InJob = inJob != 0
+	if !info.InJob {
+		info.Note = "当前进程不在任何 Job Object 里"
+		return info, 0, ""
 	}
-	return uint64(info.ProcessMemoryLimit), true
+	var je jobObjectExtendedLimitInformation
+	r, _, errno := procQueryInformationJobObject.Call(0, jobObjectExtendedLimitInformationClass,
+		uintptr(unsafe.Pointer(&je)), unsafe.Sizeof(je), 0)
+	if r == 0 {
+		if e, ok := errno.(syscall.Errno); ok {
+			info.QueryErr = uint32(e)
+		}
+		info.Note = "QueryInformationJobObject 失败（嵌套 Job 时 hJob=NULL 只给最近一层）"
+		return info, 0, ""
+	}
+	info.QueryOK = true
+	info.LimitFlags = je.BasicLimitInformation.LimitFlags
+	info.LimitFlagsHex = fmt.Sprintf("0x%X", info.LimitFlags)
+	info.ProcessMemLimit = uint64(je.ProcessMemoryLimit)
+	info.JobMemLimit = uint64(je.JobMemoryLimit)
+	limit, src := pickJobLimit(info.LimitFlags, info.ProcessMemLimit, info.JobMemLimit)
+	info.UsedLimit, info.UsedLimitSource = limit, src
+	if limit == 0 {
+		info.Note = "Job 里没有设置内存上限（LimitFlags 里既无 0x100 也无 0x2000）"
+	}
+	return info, limit, src
 }
 
 // systemMemory 返回 (物理内存总量, 可用量)；拿不到时返回 0。
@@ -83,16 +105,29 @@ func Detect() Memory {
 	}
 	total, sys := systemMemory()
 	used := CurrentUsage()
+	ji, job, src := jobLimit()
 	// 上限大于物理内存说明读到的是垃圾（例如结构体布局错位）：宁可退回系统可用内存，
 	// 也不要拿一个荒谬的数字让预检形同虚设。
-	if job, ok := jobProcessMemoryLimit(); ok && job > 0 && (total == 0 || job <= total) {
-		return Memory{Limit: job, Used: used, Available: budgetFrom(job, used, sys),
-			Source: "Windows Job Object 进程内存上限"}
+	if job > 0 && (total == 0 || job <= total) {
+		source := "Windows Job Object 进程内存上限"
+		if src == "job" {
+			source = "Windows Job Object 作业内存上限"
+		}
+		_ = ji
+		return Memory{Limit: job, Used: used, Available: budgetFrom(job, used, sys), Source: source}
 	}
 	if sys > 0 {
 		return Memory{Limit: 0, Used: used, Available: sys, Source: "系统可用内存"}
 	}
 	return Memory{Source: "未检测（可用 --max-memory 指定）"}
+}
+
+// JobProbe 返回 Windows 侧探测的原始证据（meminfo 用；其他平台返回空值）。
+func JobProbe() JobInfo {
+	ji, _, _ := jobLimit()
+	ji.TotalPhys, ji.AvailPhys = systemMemory()
+	ji.UsageNow = CurrentUsage()
+	return ji
 }
 
 // CurrentUsage 返回本进程的私有提交量（commit charge）。

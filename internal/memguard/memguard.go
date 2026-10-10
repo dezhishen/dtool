@@ -29,6 +29,38 @@ var ErrPressure = errors.New("memory pressure")
 // WatchInterval 可在测试中调整。
 var WatchInterval = 200 * time.Millisecond
 
+// Describe 返回一行人类可读的预算描述（排查用）。
+func (m Memory) Describe() string {
+	if m.Available == 0 {
+		return fmt.Sprintf("上限=%s 已用=%s 可用=0（不做检查） 来源=%s",
+			HumanSize(m.Limit), HumanSize(m.Used), m.Source)
+	}
+	return fmt.Sprintf("上限=%s 已用=%s 可用(含余量)=%s 来源=%s",
+		HumanSize(m.Limit), HumanSize(m.Used), HumanSize(m.Available), m.Source)
+}
+
+// Verdict 把预检结果翻成一句话，便于日志与 meminfo。
+func Verdict(err error) string {
+	if err == nil {
+		return "通过"
+	}
+	return "拒绝：" + err.Error()
+}
+
+// DebugEnv 设置后，query/convert 会把内存判定过程打到 NoticeWriter（排查受限环境用）。
+const DebugEnv = "DTOOL_DEBUG_MEMORY"
+
+// DebugEnabled 报告是否开启了内存判定日志。
+func DebugEnabled() bool { return os.Getenv(DebugEnv) != "" }
+
+// Debugf 在开启 DebugEnv 时输出一行诊断；关闭时是空操作。
+func Debugf(format string, a ...any) {
+	if !DebugEnabled() {
+		return
+	}
+	fmt.Fprintf(NoticeWriter, "[内存] "+format+"\n", a...)
+}
+
 // NoticeWriter 是看门狗触发时的提示输出；测试可替换。进程正在做不可中断的工作
 // （例如整块解析大 JSON）时，取消要等它跑完才会被观察到，提示先让用户知道发生了什么。
 var NoticeWriter io.Writer = os.Stderr

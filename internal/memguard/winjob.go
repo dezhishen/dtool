@@ -9,7 +9,44 @@ package memguard
 const (
 	jobObjectExtendedLimitInformationClass = 9
 	jobObjectLimitProcessMemory            = 0x100
+	jobObjectLimitJobMemory                = 0x2000
 )
+
+// JobInfo 是 Windows Job Object 探测的**原始证据**：把「读到什么」和「据此采纳了哪个上限」
+// 分开报告，排查「预检为什么没拦住」时一眼能看出是标志位不对、句柄拿不到、还是嵌套 Job。
+type JobInfo struct {
+	InJob           bool   `json:"in_job"`
+	QueryOK         bool   `json:"query_ok"`
+	QueryErr        uint32 `json:"query_last_error,omitempty"`
+	LimitFlags      uint32 `json:"limit_flags"`
+	LimitFlagsHex   string `json:"limit_flags_hex"`
+	ProcessMemLimit uint64 `json:"process_memory_limit"`
+	JobMemLimit     uint64 `json:"job_memory_limit"`
+	UsedLimit       uint64 `json:"used_limit"`
+	UsedLimitSource string `json:"used_limit_source,omitempty"`
+	TotalPhys       uint64 `json:"total_phys,omitempty"`
+	AvailPhys       uint64 `json:"avail_phys,omitempty"`
+	UsageNow        uint64 `json:"usage_now,omitempty"`
+	Note            string `json:"note,omitempty"`
+}
+
+// pickJobLimit 从 LimitFlags 与两个字段里挑出真正生效的上限。
+// 两种都认：JOB_OBJECT_LIMIT_PROCESS_MEMORY(0x100) 限单进程提交量；
+// JOB_OBJECT_LIMIT_JOB_MEMORY(0x2000) 限整个 job 的提交量（只有本进程时等价），
+// 同时设置时取更小的那个。
+func pickJobLimit(flags uint32, processLimit, jobLimit uint64) (uint64, string) {
+	var limit uint64
+	src := ""
+	if flags&jobObjectLimitProcessMemory != 0 && processLimit > 0 {
+		limit, src = processLimit, "process"
+	}
+	if flags&jobObjectLimitJobMemory != 0 && jobLimit > 0 {
+		if limit == 0 || jobLimit < limit {
+			limit, src = jobLimit, "job"
+		}
+	}
+	return limit, src
+}
 
 // IO_COUNTERS：6 个 ULONGLONG，一个都不能少。
 type ioCounters struct {

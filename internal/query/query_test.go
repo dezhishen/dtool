@@ -1,6 +1,7 @@
 package query
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -248,6 +249,35 @@ func TestSQLiteNOMEMExplained(t *testing.T) {
 	other := wrapErr(context.Background(), Options{}, errors.New("SQL logic error: no such column: x (1)"), "query")
 	if strings.Contains(other.Error(), "内存不足") {
 		t.Fatalf("普通错误被误判为 NOMEM：%v", other)
+	}
+}
+
+// DTOOL_DEBUG_MEMORY=1 时要打出预算来源与预检结论（受限环境的排查依据）。
+func TestDebugMemoryLine(t *testing.T) {
+	ws, cwd := setup(t)
+	var buf bytes.Buffer
+	old := memguard.NoticeWriter
+	memguard.NoticeWriter = &buf
+	defer func() { memguard.NoticeWriter = old }()
+
+	t.Setenv(memguard.DebugEnv, "1")
+	if _, err := Run(context.Background(), opts(ws, cwd, `SELECT region FROM "local.json"`)); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{"[内存]", "来源=", "预检=", "看门狗="} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("调试输出缺少 %q：\n%s", want, out)
+		}
+	}
+
+	buf.Reset()
+	t.Setenv(memguard.DebugEnv, "")
+	if _, err := Run(context.Background(), opts(ws, cwd, `SELECT region FROM "local.json"`)); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("未开启调试时不应输出：%s", buf.String())
 	}
 }
 

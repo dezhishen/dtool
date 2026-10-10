@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -61,6 +62,55 @@ func resolveMode(mode string, size uint64, mem memguard.Memory) LoadMode {
 		return LoadStream
 	}
 	return LoadFull
+}
+
+// Preview 是「不真正加载」的装入预演结果：回答「按当前预算，这条命令会不会被预检拦下」。
+type Preview struct {
+	Alias     string `json:"alias"`
+	Path      string `json:"path"`
+	Size      uint64 `json:"size"`
+	SizeHuman string `json:"size_human"`
+	Mode      string `json:"mode"`
+	Need      uint64 `json:"need"`
+	NeedHuman string `json:"need_human"`
+	Verdict   string `json:"verdict"`
+	Error     string `json:"error,omitempty"`
+	ErrorHint string `json:"error_hint,omitempty"`
+}
+
+// PreviewLoad 按体积与装入方式预演一组数据源（不读内容），供 meminfo 使用。
+func PreviewLoad(loadMode string, mem memguard.Memory, srcs map[string]string) []Preview {
+	aliases := make([]string, 0, len(srcs))
+	for a := range srcs {
+		aliases = append(aliases, a)
+	}
+	sort.Strings(aliases)
+	out := make([]Preview, 0, len(aliases))
+	var total, need uint64
+	modes := make([]LoadMode, 0, len(aliases))
+	for _, a := range aliases {
+		size := memguard.SizeOf(srcs[a])
+		m := resolveMode(loadMode, size, mem)
+		modes = append(modes, m)
+		total += size
+		need += size * uint64(peakFactor(m))
+		out = append(out, Preview{Alias: a, Path: srcs[a], Size: size,
+			SizeHuman: memguard.HumanSize(size), Mode: string(m),
+			Need: size * uint64(peakFactor(m)), NeedHuman: memguard.HumanSize(size * uint64(peakFactor(m)))})
+	}
+	err := memguard.CheckNeed("数据源", total, need, estimateNote(modes), mem, memguard.HintLoadMode)
+	for i := range out {
+		if err == nil {
+			out[i].Verdict = "ok"
+			continue
+		}
+		out[i].Verdict = "refused"
+		out[i].Error = err.Error()
+		if te, ok := err.(*types.Error); ok {
+			out[i].ErrorHint = te.Hint
+		}
+	}
+	return out
 }
 
 // fullTight 判断整块解析的预计峰值是否逼近预算（超过 headroom 比例）。

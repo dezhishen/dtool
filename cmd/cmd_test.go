@@ -207,6 +207,43 @@ func TestReapCommandConverges(t *testing.T) {
 	}
 }
 
+// meminfo 是「预检为什么没拦住」的排查入口：必须给出探测来源、预算与预演结论。
+func TestMemInfoCommand(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	// 只需要体积有意义，内容不需要是合法 JSON（预演只做估算，不解析）
+	if err := os.WriteFile(filepath.Join(dir, "d.json"), []byte(strings.Repeat("x", 10000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := run(t, "meminfo", "--source", "d=d.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"platform", "detected", "budget", "guard", "job_object", "usage_now", "preview"} {
+		if _, ok := got[k]; !ok {
+			t.Fatalf("meminfo 缺少 %q：%v", k, got)
+		}
+	}
+	preview := got["preview"].([]any)
+	if len(preview) != 1 || preview[0].(map[string]any)["verdict"] != "ok" {
+		t.Fatalf("默认预算下应通过：%v", preview)
+	}
+
+	// 预算明显不够时必须给出 refused（这就是「排查结论」）
+	got, err = run(t, "meminfo", "--max-memory", "1K", "--source", "d=d.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pv := got["preview"].([]any)[0].(map[string]any)
+	if pv["verdict"] != "refused" || pv["error"] == "" {
+		t.Fatalf("预算不足应 refused 且带原因：%v", pv)
+	}
+	if got["guard"].(map[string]any)["watchdog"] != true {
+		t.Fatalf("给了预算就该开看门狗：%v", got["guard"])
+	}
+}
+
 func xlsx(t *testing.T, dir string) string {
 	t.Helper()
 	f := excelize.NewFile()

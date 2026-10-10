@@ -203,3 +203,27 @@ func TestBudgetFromJobLimit(t *testing.T) {
 		}
 	}
 }
+
+// Windows 的两种 Job 上限都要认，同时设置时取更小（纯逻辑，可在 Linux 上验证）。
+func TestPickJobLimit(t *testing.T) {
+	cases := []struct {
+		name         string
+		flags        uint32
+		process, job uint64
+		wantLimit    uint64
+		wantSrc      string
+	}{
+		{"只有 PROCESS_MEMORY", jobObjectLimitProcessMemory, 256 << 20, 0, 256 << 20, "process"},
+		{"只有 JOB_MEMORY", jobObjectLimitJobMemory, 0, 512 << 20, 512 << 20, "job"},
+		{"两个都有取更小", jobObjectLimitProcessMemory | jobObjectLimitJobMemory, 256 << 20, 512 << 20, 256 << 20, "process"},
+		{"两个都有且 job 更小", jobObjectLimitProcessMemory | jobObjectLimitJobMemory, 512 << 20, 256 << 20, 256 << 20, "job"},
+		{"标志位置了但值为 0（无效）", jobObjectLimitProcessMemory, 0, 0, 0, ""},
+		{"没有内存上限标志", 0x40, 256 << 20, 512 << 20, 0, ""},
+	}
+	for _, c := range cases {
+		limit, src := pickJobLimit(c.flags, c.process, c.job)
+		if limit != c.wantLimit || src != c.wantSrc {
+			t.Errorf("%s: pickJobLimit = (%d,%q), want (%d,%q)", c.name, limit, src, c.wantLimit, c.wantSrc)
+		}
+	}
+}

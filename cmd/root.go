@@ -78,7 +78,7 @@ func Execute(version string) error {
 
 	root.SetVersionTemplate("dtool version " + info.Summary() + "\n")
 	root.AddCommand(newVersionCmd(info), newUpgradeCmd(version), newConvertCmd(), newQueryCmd(),
-		newVisualizeCmd(), newPipelineCmd(), newActionsCmd(), newDatasetsCmd(), newReapCmd())
+		newVisualizeCmd(), newPipelineCmd(), newActionsCmd(), newDatasetsCmd(), newReapCmd(), newMemInfoCmd())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

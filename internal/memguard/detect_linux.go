@@ -20,17 +20,12 @@ func Detect() Memory {
 	limit, used, src := cgroupMemory()
 	avail := memAvailable()
 	m = Memory{Limit: limit, Used: used, Source: src}
-	switch {
-	case limit > 0 && used > 0:
-		m.Available = limit - used
-	case limit > 0:
-		m.Available = limit
-	default:
+	// 取 min(cgroup 上限-已用, 系统可用)；没有 cgroup 上限时就用系统可用内存。
+	// 这里曾经写成 min(m.Available, avail) 且 m.Available 在没有 cgroup 时是 0，
+	// 结果「普通机器上预检与看门狗全是关的」——探针（meminfo）才把它照出来。
+	m.Available = budgetFrom(limit, used, avail)
+	if limit == 0 {
 		m.Source = "系统可用内存"
-	}
-	m.Available = min(m.Available, avail)
-	if avail == 0 {
-		m.Available = limit - used
 	}
 	return m
 }
@@ -109,4 +104,9 @@ func CurrentUsage() uint64 {
 		}
 	}
 	return RuntimeUsage()
+}
+
+// JobProbe：Linux 没有 Job Object（预算来自 cgroup/系统可用内存），返回空值占位。
+func JobProbe() JobInfo {
+	return JobInfo{Note: "Linux 没有 Job Object，预算来自 cgroup/系统可用内存"}
 }

@@ -65,6 +65,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | 命令 | 要点 |
 |------|------|
 | `convert --input f.xlsx [--sheet S] [--name N]` | 仅 `.xlsx`；`--name` 缺省取文件名（指定 sheet 时追加 `_<sheet>`）；输出含 `data_file`/`schema_file`/`updated_at`/`warnings` |
+| `meminfo [--source alias=文件]...` | 内存排查入口：预算来源（cgroup / Job Object / 系统可用内存 / `--max-memory`）、原始探测字段（`job_object`）、看门狗开关，以及按当前输入的**预检预演**（`verdict: ok/refused`）。受限环境里「预检为什么没拦住」先跑它 |
 | `datasets list \| show <name> \| delete <name>` | 查阅/删除数据集；回答"有哪些数据、长什么样"用这个 |
 | `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y；y 必须是数值列 |
@@ -185,6 +186,8 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
   本身就是提交上限；Linux 仍按 RSS。
 - 内存超出预算时看门狗会先打印「内存超出预算（本进程已用 xx，预算 xx），正在中止」，再以 `code: 4` 失败——不会静默卡住。显式 `--load-mode full` 时也是逐元素解码、可被中止，长文件不会再出现「几十秒没有任何输出」。
 - 需要放宽/关闭检查：`--max-memory 4G` / `--max-memory 0`，或 `DTOOL_MAX_MEMORY` 环境变量。
+- 排查「预检/看门狗到底在不在工作」：`dtool meminfo [--source alias=文件]`（预算来源、原始探测字段与预检预演）；
+  `DTOOL_DEBUG_MEMORY=1` 把每个命令的判定过程打到 stderr（来源、预算、装入方式、预计 need、预检结论、看门狗阈值）。
 - 预算来源随平台不同：Linux 读 cgroup/系统可用内存，Windows 读 **Job Object 进程内存上限**（存在即生效），
   其他平台（如 macOS）**不自动探测**——拿不到预算时预检与看门狗都不工作，所以容器/受限环境里请显式给
   `--max-memory`。顶到外部硬上限时可能看到「内存不足：…SQLite 分配失败」（code 4，含 hint），

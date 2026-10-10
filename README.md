@@ -175,6 +175,9 @@ go test ./internal/query -bench LoadStream -benchmem   # 只看某一项
 - **留余量**：`auto` 只有在整块解析峰值 ≤ 预算 80% 时才选它，否则走流式；显式 `--load-mode full` 且逼近预算时会提前提示；
 - **载入进度**：数据源 ≥8MB 时向 stderr 打印「载入 xx（大小，装入方式，预计需约 xx 内存）...」，即使进程被强杀也能看出卡在哪里。
 
+排查用 `dtool meminfo [--source alias=文件]`（打印预算来源、原始探测字段与预检预演）或
+`DTOOL_DEBUG_MEMORY=1`（把每个命令的判定过程打到 stderr）。
+
 **探测来源**（决定上面这些预检/看门狗的数字从哪来）：Linux 读 cgroup v2/v1 与系统可用内存；
 Windows 读 **Job Object 的进程内存上限**（`JOB_OBJECT_LIMIT_PROCESS_MEMORY`，CI/沙箱常用）与系统可用内存，
 进程用量按工作集计算；macOS 等平台不做自动探测，请用 `--max-memory` 显式给出——否则预检与看门狗
