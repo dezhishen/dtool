@@ -65,7 +65,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | 命令 | 要点 |
 |------|------|
 | `convert --input f.xlsx [--sheet S] [--name N]` | 仅 `.xlsx`；`--name` 缺省取文件名（指定 sheet 时追加 `_<sheet>`）；输出含 `data_file`/`schema_file`/`updated_at`/`warnings` |
-| `meminfo [--source alias=文件]...` | 内存排查入口：预算来源（cgroup / Job Object / 系统可用内存 / `--max-memory`）、原始探测字段（`job_object`）、看门狗开关，以及按当前输入的**预检预演**（`verdict: ok/refused`）。受限环境里「预检为什么没拦住」先跑它 |
+| `meminfo [--source alias=文件]...` | 内存排查入口：预算来源（cgroup / Job Object / 系统可用内存 / `--max-memory`）、原始探测字段（`job_object`）、看门狗开关，以及按当前输入的**预检预演**（`verdict: ok/borderline/risky/forced`，以及选中的执行档 `plan.chosen` 与理由——预检与真正执行走同一套选档逻辑）。受限环境里「预检为什么没拦住」先跑它 |
 | `datasets list \| show <name> \| delete <name>` | 查阅/删除数据集；回答"有哪些数据、长什么样"用这个 |
 | `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y；y 必须是数值列 |
@@ -74,6 +74,8 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
 | `--store auto\|memory\|disk` | SQLite 库落在哪：auto（按预算选档）/ memory（快）/ disk（峰值最低） |
 | `--mem-policy try\|strict` | 所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败 |
+| `-c, --config f.yaml` | 配置文件（YAML：font / workspace / preview_rows 等）；命令行参数优先 |
+| `--sandbox` | 默认开启：SQL 只允许单条 SELECT，且只能读工作区 / 当前目录 / `--source` 文件；`--sandbox=false` 关闭 |
 | `--update [--pre]` / `upgrade [--version V] [--pre]` | 检查更新 / 升级自身；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
 
 通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
@@ -173,7 +175,10 @@ preview_rows: 20
 
 JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `stream` / `full`。
 
-- `auto` 按文件大小自适应：**≥32MB 走流式**；可用内存不够整块解析时也自动转流式；整块解析还要求峰值 ≤ 预算的 80%（留余量，免得擦着预算在中途被中止）。所以一般情况下不用管它。
+- `auto`（默认）按**内存预算**选档，不用自己算：① 输入 <32MB 且整块解析预计峰值 ≤ 预算 80% →
+  `full` + 内存库；② 否则整块解析峰值 ≤ 预算 → `stream` + 内存库；③ 再不行 → `stream` +
+  `--store disk`（峰值最低）；④ 连最省档都放不下 → 按 `--mem-policy`（`try` 默认仍试最省档，
+  `strict` 直接失败）。stderr 与 Action 里会写明选了哪档、为什么，出问题先看那里。
 - 峰值内存：`full` ≈ 文件大小 × 13；`stream` ≈ ×2。
 - 1 核 2GB 下实测（默认 `auto`）：10 万行 2.4s；100 万行 19–29s；500 万行 1:29、604MB。默认参数即可，不必再调 `--timeout`。
 - **Excel（`convert`）也是流式的**：两阶段、单次解析，峰值 ≈ 32MB + 文件 × 3（实测 7.4MB/15 万行 → 47MB，17.8MB/40 万行 → 74MB），与行数无关。它没有、也不需要 `--load-mode`——那组开关选的是 JSON → 内存 SQLite 的装入方式，只对 `query` 生效。预检按「32MB + 文件 × 6」估算，超出预算才会在转换前拦下并给出数字与退出口。

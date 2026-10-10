@@ -332,8 +332,10 @@ dtool visualize --input latest:query --type pie --x region --y total
 | `--preview-rows` | Action 预览行数，默认 20 |
 | `--no-record` | 跳过 Action 记录（用于临时查询）；此时 stdout 不含 `action_id`，且不可被后续命令引用 |
 | `--sandbox` | 默认开启：SQL 仅允许读取 `--source` 绑定文件与工作区内文件，禁止读取任意系统路径（如 `/etc/passwd`）、URL 与写入类语句 |
-| `--load-mode` | JSON 装入方式：`auto`（默认，按文件大小与可用内存自适应）/ `stream` / `full` |
+| `--load-mode` | JSON 装入方式：`auto`（默认，按内存预算在 full+内存库 / stream+内存库 / stream+磁盘库 三档间选；整块解析仅在输入 <32MB 且预计峰值 ≤ 预算 80% 时使用）/ `stream` / `full` |
 | `--max-memory` | 内存预算，如 `4G`/`512M`；`0` 关闭检查（默认自动探测 cgroup v2/v1 与系统可用内存），见 8.4.1 |
+| `--store` | SQLite 库落在哪：`auto`（默认，按预算在内存库 / 磁盘库间选）/ `memory`（快）/ `disk`（峰值最低，临时表落盘，见 8.5） |
+| `--mem-policy` | 所有档都预计超预算时：`try`（默认）仍试最省档并把失败记入 Action（AI 可读后换招）/ `strict` 直接失败 |
 | `-c, --config` | 配置文件，命令行参数优先；严格模式拒绝未知键 |
 
 **退出码与 stdout 约定**：成功退出码 0，stdout 为结构化 JSON；失败退出码非 0
@@ -532,6 +534,20 @@ dtool actions export --output .dtool/actions_dump.json
 它自己走 `openWorkspaceRaw`（不预先回收）。
 
 ---
+
+### 5.6 `version` / `upgrade`：版本与自更新
+
+```bash
+dtool version [--short] [--deps]        # 版本与构建元数据；--short 只输出版本号，--deps 附带依赖模块版本
+dtool upgrade [--version V] [--channel stable|preview|dev] [--pre]   # 升级自身，可降级
+dtool query --sql ... --update          # 查询前先检查更新（内置同一套逻辑）
+```
+
+渠道：`stable`（默认，最新正式版）/ `preview`（正式版 + 预览版，等价于旧的 `--pre`）/
+`dev`（`main` 的最新构建，滚动发布到 tag `dev`，比的是构建号而不是版本号大小）。
+`--version` 可指定任意历史版本（含降级）；dev 构建写 `--version dev` 或 `--version dev-<run id>`，
+但 dev 渠道只保留最新一次构建。网络瞬断按指数退避重试 3 次，失败时 `hint` 给出 Releases 页面，
+见 8.4.3。
 
 ## 6. JSON Schema 生成设计
 
