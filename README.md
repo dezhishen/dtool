@@ -245,6 +245,17 @@ tag 即发版，推送后由 `.github/workflows/release.yml` 校验、测试、�
 | 正式版 | `vX.Y.0` | 打在 `main`；基线为上一个正式/补丁版（汇总整个预览期） |
 | 补丁版 | `vX.Y.Z`（Z≥1） | 打在 `main` 或 `release/X.Y`；要求 `vX.Y.0` 已存在 |
 
+**预览版会随正式版发布自动清理**：`.github/workflows/prune-previews.yml` 每天定时跑一次
+（也可手动触发，手动触发默认 `dry_run=true` 只打印不删），删除「对应正式版已经发布」且**正式版发布满 14 天**
+的预览版 Release 与 tag（`--retention-days` 可调，`0` 表示正式版一发就清理）。
+只处理 `vX.Y.0-preview.N`，不会碰正式版 `vX.Y.0` / 补丁版 `vX.Y.Z`。
+
+```bash
+bash scripts/prune-preview-releases.sh --dry-run              # 本地看看会删什么（不发请求）
+bash scripts/prune-preview-releases.sh --dry-run --retention-days 0
+make scripts-test                                            # 选择规则（含保留期边界）单测
+```
+
 ## 许可证
 
 dtool 以 [MIT](LICENSE) 协议发布。依赖均为宽松协议（MIT / BSD-3-Clause / Apache-2.0；`golang/freetype` 双协议中选用 FreeType License），不含 GPL/LGPL/MPL 代码。

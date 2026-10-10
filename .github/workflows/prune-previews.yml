@@ -1,0 +1,39 @@
+name: Prune Previews
+
+# 清理「正式版已经发布」的预览版 Release（含 tag）：
+# 正式版发布满 RETENTION_DAYS（默认 14 天）后自动删除 vX.Y.0-preview.N。
+# 只处理预览版，绝不会碰正式版 vX.Y.0 / 补丁版 vX.Y.Z。
+on:
+  schedule:
+    - cron: "17 3 * * *" # 每天 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只打印将要删除的内容，不实际删除
+        type: boolean
+        default: true
+      retention_days:
+        description: 正式版发布后保留多少天
+        type: string
+        default: "14"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prune-previews
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # 需要完整 tag 与 tag 时间
+      - name: 清理已发布正式版的预览版
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          RETENTION_DAYS: ${{ inputs.retention_days || '14' }}
+        run: bash scripts/prune-preview-releases.sh

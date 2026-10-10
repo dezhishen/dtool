@@ -5,14 +5,15 @@ PLATFORMS := linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 win
 # 版本与元数据（commit/分支/构建时间/CI 运行…）由 scripts/ldflags.sh 统一生成
 LDFLAGS   := $(shell bash scripts/ldflags.sh $(VER))
 
-.PHONY: build build-all release-build test vet fmt check bench notices examples examples-data clean help $(addprefix build-,$(PLATFORMS))
+.PHONY: build build-all release-build test vet fmt check scripts-test bench notices examples examples-data clean help $(addprefix build-,$(PLATFORMS))
 
 help:
 	@echo "build               当前平台"
 	@echo "build-<os>-<arch>   单个平台，可选: $(PLATFORMS)"
 	@echo "build-all           全部平台二进制 -> dist/bin/"
 	@echo "release-build       全部平台打包(tar.gz/zip) + checksums.txt -> dist/"
-	@echo "check               gofmt + vet + test + 脚本语法"
+	@echo "check               gofmt + vet + test + 脚本语法 + 脚本单测"
+	@echo "scripts-test        scripts/tests/*.test.sh"
 	@echo "bench               性能基准（JSON 装入 / Excel 转换）"
 	@echo "examples            构建并运行全部示例（examples/）"
 	@echo "examples-data       重新生成示例数据源"
@@ -53,6 +54,11 @@ check:
 	go vet ./...
 	go test ./...
 	bash -n scripts/*.sh
+	@$(MAKE) --no-print-directory scripts-test
+
+# scripts/tests/*.test.sh：脚本里的纯逻辑（如预览版清理的选择规则）单测
+scripts-test:
+	@for f in scripts/tests/*.test.sh; do echo "== $$f"; bash "$$f"; done
 
 # 构建后运行全部示例（输出在 examples/out/）
 examples: build

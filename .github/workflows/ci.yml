@@ -48,6 +48,8 @@ jobs:
           git diff --exit-code go.mod go.sum
       - name: shell scripts
         run: bash -n scripts/*.sh
+      - name: 脚本单测
+        run: make scripts-test
       - name: 性能基准冒烟
         # 只跑一轮：确认基准本身可用（-benchtime 1x 不做耗时断言，避免 CI 抖动误报）
         run: go test -run '^$' -bench . -benchtime 1x ./internal/query/ ./internal/pipeline/
