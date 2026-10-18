@@ -24,7 +24,9 @@ type Options struct {
 	// Y 是数值列：一个列单系列；多个列各成一个系列（宽表直取）。
 	Y []string
 	// GroupBy 非空时按该字段拆分多系列（仅 bar / line）：每个系列是一条线或一组柱子。
-	GroupBy  string
+	GroupBy string
+	// Missing 决定 group-by 缺失组合的处理：zero（默认，补 0）/ gap（置空，line 断线）。
+	Missing  string
 	Title    string
 	Format   string   // png / svg
 	FontPath string   // 可选 TTF，用于显示中文
@@ -35,7 +37,9 @@ type Options struct {
 type Result struct {
 	Points int
 	// Series 是 --group-by 的系列名，按图例顺序；单系列时为空。
-	Series   []string
+	Series []string
+	// Missing 是实际使用的缺失处理（空表示 zero）；gap 时 line 会断线。
+	Missing  string
 	Font     string // 实际使用的字体文件，空表示内置默认字体
 	Warnings []string
 }
@@ -130,6 +134,18 @@ func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 		return nil, types.Errorf(types.CodeUsage, "unsupported chart type %q", o.Type).
 			WithHint("可选: bar / line / pie / table")
 	}
+	missing := o.Missing
+	if missing == "" {
+		missing = "zero"
+	}
+	if missing != "zero" && missing != "gap" {
+		return nil, types.Errorf(types.CodeUsage, "--missing %q 无效", o.Missing).
+			WithHint("可选: zero（默认，缺失组合补 0）/ gap（缺失组合置空，line 断线）")
+	}
+	if missing == "gap" && o.Type != "line" {
+		return nil, types.Errorf(types.CodeUsage, "--missing gap 仅适用于 line").
+			WithHint("bar 没有断点语义（缺失的柱子本来就不可见），请用 --type line 或 --missing zero")
+	}
 	if len(o.Y) == 0 {
 		return nil, types.Errorf(types.CodeUsage, "缺少 --y 数值列").
 			WithHint("用 --y col 或 --y col1,col2 指定一个或多个数值列")
@@ -183,7 +199,7 @@ func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 	var names []string
 	if o.GroupBy != "" {
 		var err error
-		xs, names, series, err = pivot(rows, o.X, o.GroupBy, o.Y[0])
+		xs, names, series, err = pivot(rows, o.X, o.GroupBy, o.Y[0], missing == "gap")
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +222,14 @@ func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 			names = append([]string(nil), o.Y...)
 		}
 	}
+	if len(names) == 1 {
+		// group-by 只透出一个系列时，与不传 group-by 完全一致：不出图例、不加顶部留白。
+		names = nil
+	}
 	res.Series = names
+	if missing == "gap" {
+		res.Missing = "gap"
+	}
 
 	opts := []charts.OptionFunc{charts.TitleOptionFunc(charts.TitleOption{Text: o.Title})}
 	if o.Format == "svg" {
@@ -294,8 +317,9 @@ func label(v any) string {
 
 // pivot 把长表 (x, group, y) 透视成「X 分类 × group 系列」的矩阵。
 // 分类与系列均按输入顺序（首次出现）排列，不重排，用户的 ORDER BY 即最终顺序；
-// 缺失组合补 0；同一个 (x, group) 出现多次无法确定格子取值，直接报错并给出聚合提示。
-func pivot(rows []types.Row, x, groupBy, y string) (xs, names []string, series [][]float64, err error) {
+// 缺失组合默认补 0，gap 为 true 时置为 go-charts 的空值哨兵（line 断线）；
+// 同一个 (x, group) 出现多次无法确定格子取值，直接报错并给出聚合提示。
+func pivot(rows []types.Row, x, groupBy, y string, gap bool) (xs, names []string, series [][]float64, err error) {
 	xIdx := map[string]int{}
 	gIdx := map[string]int{}
 	cell := map[[2]int]float64{}
@@ -349,7 +373,12 @@ func pivot(rows []types.Row, x, groupBy, y string) (xs, names []string, series [
 	for gi := range series {
 		series[gi] = make([]float64, len(xs))
 		for xi := range xs {
-			series[gi][xi] = cell[[2]int{xi, gi}] // 缺失组合为 0
+			k := [2]int{xi, gi}
+			if v, ok := cell[k]; ok {
+				series[gi][xi] = v
+			} else if gap {
+				series[gi][xi] = charts.GetNullValue()
+			}
 		}
 	}
 	return xs, names, series, nil

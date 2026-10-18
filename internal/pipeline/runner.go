@@ -16,6 +16,7 @@ type Config struct {
 	Input             string // 复用已持久化的数据（文件 / action:<id> / latest:<type>），与 Excel 二选一
 	Chart, X, Y       string
 	GroupBy           string
+	Missing           string
 	Title, Format     string
 	Font              string
 	Output            string
@@ -42,6 +43,9 @@ func (e *Env) Pipeline(c Config) (*types.PipelineResult, error) {
 		input := map[string]any{"excel": c.Excel, "input": c.Input, "sql": c.SQL, "chart": c.Chart, "x": c.X}
 		if y := visualize.ParseY(c.Y); len(y) != 0 {
 			input["y"] = y // Action 里 y 统一记录为数组
+		}
+		if c.Missing != "" && c.Missing != "zero" {
+			input["missing"] = c.Missing
 		}
 		var err error
 		parent, err = e.Rec.Start(action.StartParams{Type: "pipeline", Command: e.Command, Metadata: e.Meta,
@@ -99,8 +103,8 @@ func (e *Env) Pipeline(c Config) (*types.PipelineResult, error) {
 
 		if c.Chart != "" {
 			ch, err := e.Visualize(VisualizeParams{Input: e.WS.Abs(q.ResultFile), From: fromRef(q.ActionID),
-				Type: c.Chart, X: c.X, Y: visualize.ParseY(c.Y), GroupBy: c.GroupBy, Title: c.Title, Format: c.Format,
-				Output: c.Output, Font: c.Font}, pid)
+				Type: c.Chart, X: c.X, Y: visualize.ParseY(c.Y), GroupBy: c.GroupBy, Missing: c.Missing,
+				Title: c.Title, Format: c.Format, Output: c.Output, Font: c.Font}, pid)
 			if err != nil {
 				return fail("visualize", err)
 			}

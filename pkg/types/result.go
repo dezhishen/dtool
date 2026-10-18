@@ -118,6 +118,7 @@ type VisualizeResult struct {
 	X        string   `json:"x,omitempty"`
 	Y        []string `json:"y,omitempty"`
 	GroupBy  string   `json:"group_by,omitempty"`
+	Missing  string   `json:"missing,omitempty"`
 	Series   []string `json:"series,omitempty"`
 	Points   int      `json:"points"`
 	Warnings []string `json:"warnings,omitempty"`

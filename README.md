@@ -23,7 +23,7 @@ dtool visualize --input latest:query --type line --x month --y sales,profit
 dtool actions list --limit 5
 ```
 
-导出：`query --format csv|markdown|table|json|xlsx --output <文件>`（xlsx 需 `--output`）；`visualize --type bar|line|pie --format png|svg` 出图（`--group-by <字段>` 长表透视，`--y a,b` 宽表多列；bar 为分组柱、line 为多条折线）；`visualize --type table --format md|xlsx` 导出表格。
+导出：`query --format csv|markdown|table|json|xlsx --output <文件>`（xlsx 需 `--output`）；`visualize --type bar|line|pie --format png|svg` 出图（`--group-by <字段>` 长表透视，`--y a,b` 宽表多列；bar 为分组柱、line 为多条折线；`--missing zero|gap` 控制缺失组合补 0 / 断线）；`visualize --type table --format md|xlsx` 导出表格。
 
 进程被强杀（SIGKILL / 被 OOM 杀）时，dtool 起的看护进程会在约 0.25s 内把这次命令遗留的 Action
 收敛为 `stale`（`error.code=5`，说明「进程已消失、结果未知」），无需再跑命令；`DTOOL_NO_REAPER=1` 可关闭。

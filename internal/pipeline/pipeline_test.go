@@ -381,6 +381,12 @@ func TestPipelineGroupByChart(t *testing.T) {
 	if ys, ok := a.Input["y"].([]any); !ok || len(ys) != 1 || ys[0] != "total" {
 		t.Fatalf("action input y should be an array: %v", a.Input["y"])
 	}
+	if sc, _ := a.Input["series_count"].(float64); sc != 2 {
+		t.Fatalf("action input series_count = %v", a.Input["series_count"])
+	}
+	if ss, _ := a.Input["series"].([]any); len(ss) != 2 || ss[0] != "Q1" || ss[1] != "Q2" {
+		t.Fatalf("action input series = %v", a.Input["series"])
+	}
 	if got := a.Output.Details["series"]; got == nil {
 		t.Fatalf("details should record series: %v", a.Output.Details)
 	}
@@ -437,5 +443,32 @@ func TestPipelineMultiYChart(t *testing.T) {
 	var te *types.Error
 	if !errors.As(err, &te) || te.Code != types.CodeUsage || !strings.Contains(te.Message, "不能同时使用") {
 		t.Fatalf("mutex: %v", err)
+	}
+}
+
+func TestPipelineMissingGap(t *testing.T) {
+	env, dir := newEnv(t)
+	data := filepath.Join(dir, "gap.json")
+	os.WriteFile(data, []byte(`[
+	 {"region":"East","quarter":"Q1","total":10},
+	 {"region":"West","quarter":"Q1","total":20},
+	 {"region":"East","quarter":"Q2","total":30}
+	]`), 0o644)
+
+	res, err := env.Pipeline(Config{Input: data, SQL: `SELECT region, quarter, total FROM data`,
+		Chart: "line", X: "region", Y: "total", GroupBy: "quarter", Missing: "gap", Format: "svg",
+		MaxRows: 100, Timeout: 30 * time.Second, Sandbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Chart.Missing != "gap" {
+		t.Fatalf("missing = %q", res.Chart.Missing)
+	}
+	a, err := env.Rec.Get(res.Chart.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Input["missing"] != "gap" {
+		t.Fatalf("action input missing = %v", a.Input["missing"])
 	}
 }

@@ -450,10 +450,13 @@ dtool visualize --input action:01HX...B --type line --x month --y sales,profit
 | `--type` | 是 | 图表类型：`bar` / `line` / `pie` / `table` |
 | `--x` | 是* | X 轴字段（表格类型可省略） |
 | `--y` | 是* | Y 轴数值列；多个列用逗号分隔（如 `sales,profit`），每个列一个系列 |
-| `--group-by` | 否 | 按该字段拆分多系列（仅 `bar` / `line`，与多 `--y` 互斥）；分类与系列按输入顺序（`ORDER BY`）排列，缺失组合补 0，同一 `(x, group)` 重复出现会报错并提示先聚合；不能与 `--x` / `--y` 同列；系列数上限 50 |
+| `--group-by` | 否 | 按该字段拆分多系列（仅 `bar` / `line`，与多 `--y` 互斥）；分类与系列按输入顺序（`ORDER BY`）排列，缺失组合默认补 0（`--missing gap` 时 line 断线），同一 `(x, group)` 重复出现会报错并提示先聚合；不能与 `--x` / `--y` 同列；系列数上限 50；只有一个唯一值时按单系列渲染（与不传 `--group-by` 逐字节一致） |
+| `--missing` | 否 | 缺失组合处理：`zero`（默认，补 0）/ `gap`（置空，仅 `line` 支持，断线） |
 | `--title` | 否 | 图表标题 |
 | `--output` | 否 | 输出文件，默认写入 `.dtool/outputs/charts/<action-id>/` |
 | `--format` | 否 | 图表：`png` / `svg`；`--type table` 时可选 `md`（默认）/ `xlsx` |
+
+多系列（`--group-by` 或逗号分隔的多 `--y`）时，Action `input` 记录 `series` 与 `series_count`（系列名数组与数量），`output.details` 同步保留；单系列不写这两个字段。
 
 ### 5.4 `pipeline`：组合命令
 

@@ -41,6 +41,7 @@ func newVisualizeCmd() *cobra.Command {
 	f.StringVar(&p.X, "x", "", "X 轴字段")
 	f.StringVar(&yFlag, "y", "", "Y 轴数值列，多个用逗号分隔：sales,profit")
 	f.StringVar(&p.GroupBy, "group-by", "", "按该字段拆分多系列（bar / line）：如 region × quarter")
+	f.StringVar(&p.Missing, "missing", "zero", "缺失组合处理：zero（补 0，默认）/ gap（置空，line 断线）")
 	f.StringVar(&p.Title, "title", "", "标题")
 	f.StringVar(&p.Output, "output", "", "输出文件，默认写入工作区产物目录")
 	f.StringVar(&p.Format, "format", "png", "png / svg；--type table 时可用 md / xlsx")

@@ -50,8 +50,9 @@ const (
 func xlsxNeed(size uint64) uint64 { return xlsxBaseOverhead + size*xlsxPeakFactor }
 
 // run 负责 Action 的 Start/Success/Fail 生命周期与产物目录。
+// 回调拿到 Action 指针，可在落盘前补充 input（例如可视化后才确定的系列名）。
 func (e *Env) run(typ string, input map[string]any, parent, derived string,
-	fn func(id, dir string) (*action.Output, error)) (*action.Action, error) {
+	fn func(a *action.Action, dir string) (*action.Output, error)) (*action.Action, error) {
 	var a *action.Action
 	var dir string
 	if e.NoRecord {
@@ -59,7 +60,7 @@ func (e *Env) run(typ string, input map[string]any, parent, derived string,
 		if err != nil {
 			return nil, err
 		}
-		a, dir = &action.Action{Type: typ}, d
+		a, dir = &action.Action{Type: typ, Input: input}, d
 	} else {
 		var err error
 		a, err = e.Rec.Start(action.StartParams{Type: typ, Input: input, Command: e.Command,
@@ -73,7 +74,7 @@ func (e *Env) run(typ string, input map[string]any, parent, derived string,
 			}
 		}
 	}
-	out, err := fn(a.ID, dir)
+	out, err := fn(a, dir)
 	if err != nil {
 		te := types.AsError(err, types.CodeExec)
 		if !e.NoRecord {
@@ -114,7 +115,7 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 	ds := &dataset.Store{WS: e.WS}
 	var res *types.ConvertResult
 	a, err := e.run("convert", map[string]any{"input": p.Input, "sheet": p.Sheet, "name": name},
-		parentID, "", func(id, _ string) (*action.Output, error) {
+		parentID, "", func(a *action.Action, _ string) (*action.Output, error) {
 			// 放进回调内，内存不足时同样留下一条 failed 的 Action，便于事后排查
 			size := memguard.SizeOf(p.Input)
 			mem := memguard.Budget(e.MaxMemory)
@@ -139,7 +140,7 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 			if err != nil {
 				return nil, err
 			}
-			m, err := ds.Commit(stage, dataset.Meta{Name: name, ActionID: id, Source: p.Input, Sheet: r.Sheet, UpdatedAt: now,
+			m, err := ds.Commit(stage, dataset.Meta{Name: name, ActionID: a.ID, Source: p.Input, Sheet: r.Sheet, UpdatedAt: now,
 				RecordCount: r.RecordCount, Columns: r.Columns})
 			if err != nil {
 				return nil, err
@@ -222,7 +223,7 @@ func (e *Env) Query(p QueryParams, parentID string) (*types.QueryResult, error) 
 	cwd, _ := os.Getwd()
 	input := map[string]any{"sql": p.SQL, "sources": recorded, "format": format}
 	var res *types.QueryResult
-	a, err := e.run("query", input, parentID, derived, func(_, dir string) (*action.Output, error) {
+	a, err := e.run("query", input, parentID, derived, func(_ *action.Action, dir string) (*action.Output, error) {
 		r, err := query.Run(e.Ctx, query.Options{SQL: p.SQL, Sources: sources,
 			Roots: []string{e.WS.Root, cwd}, Lookup: (&dataset.Store{WS: e.WS}).Lookup,
 			Sandbox: p.Sandbox, MaxRows: p.MaxRows, Timeout: p.Timeout, MaxMemory: e.MaxMemory,
@@ -270,8 +271,8 @@ func writeFormatted(path, format string, r *types.QueryResult) error {
 }
 
 type VisualizeParams struct {
-	Input, Type, X, GroupBy, Title, Format, Output, Font, From string
-	Y                                                          []string
+	Input, Type, X, GroupBy, Missing, Title, Format, Output, Font, From string
+	Y                                                                   []string
 }
 
 func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeResult, error) {
@@ -296,8 +297,11 @@ func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeRes
 	if p.GroupBy != "" {
 		input["group_by"] = p.GroupBy
 	}
+	if p.Missing != "" && p.Missing != "zero" {
+		input["missing"] = p.Missing
+	}
 	var res *types.VisualizeResult
-	a, err := e.run("visualize", input, parentID, derived, func(_, dir string) (*action.Output, error) {
+	a, err := e.run("visualize", input, parentID, derived, func(act *action.Action, dir string) (*action.Output, error) {
 		cols, rows, err := visualize.LoadRows(r.Path)
 		if err != nil {
 			return nil, err
@@ -312,12 +316,17 @@ func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeRes
 			}
 		}
 		vr, err := visualize.Render(cols, rows, visualize.Options{Type: p.Type, X: p.X, Y: p.Y, GroupBy: p.GroupBy,
-			Title: p.Title, Format: p.Format, FontPath: p.Font, OutFile: file})
+			Missing: p.Missing, Title: p.Title, Format: p.Format, FontPath: p.Font, OutFile: file})
 		if err != nil {
 			return nil, err
 		}
+		if len(vr.Series) > 0 {
+			// 系列名只有在渲染（透视/多列校验）之后才能确定，这里在 Action 落盘前补进 input。
+			act.Input["series"] = vr.Series
+			act.Input["series_count"] = len(vr.Series)
+		}
 		res = &types.VisualizeResult{Success: true, File: e.WS.Rel(file), Type: p.Type, X: p.X, Y: p.Y,
-			GroupBy: p.GroupBy, Series: vr.Series, Points: vr.Points, Warnings: vr.Warnings}
+			GroupBy: p.GroupBy, Missing: vr.Missing, Series: vr.Series, Points: vr.Points, Warnings: vr.Warnings}
 		details := map[string]any{"type": p.Type, "x": p.X, "points": vr.Points, "font": vr.Font}
 		if len(p.Y) != 0 {
 			details["y"] = p.Y
@@ -325,6 +334,9 @@ func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeRes
 		if p.GroupBy != "" {
 			details["group_by"] = p.GroupBy
 			details["series"] = vr.Series
+		}
+		if vr.Missing != "" {
+			details["missing"] = vr.Missing
 		}
 		return &action.Output{Files: []string{res.File}, Warnings: vr.Warnings,
 			Summary: fmt.Sprintf("生成 %s 图表：%d 个数据点", p.Type, vr.Points),

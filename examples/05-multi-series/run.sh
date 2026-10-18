@@ -14,7 +14,11 @@ dt query --sql '
 viz --input latest:query --type bar --x 区域 --y 销售额 --group-by 月份 \
   --title "各区域月度销售额" --output grouped_bar.png
 
-# 2. 宽表 → 多折线：一个 SQL 直接产出多个指标列，--y 用逗号分隔
+# 2. 同一份长表用 line + --missing gap：缺失的 (区域, 月份) 直接断线
+viz --input latest:query --type line --x 月份 --y 销售额 --group-by 区域 --missing gap \
+  --title "各区域月度趋势（缺口断线）" --output region_gap.png
+
+# 3. 宽表 → 多折线：一个 SQL 直接产出多个指标列，--y 用逗号分隔
 dt query --sql '
   SELECT substr("日期", 1, 7) AS "月份",
          SUM(CASE WHEN "状态" = '"'已完成'"' THEN "金额" ELSE 0 END) AS "已完成",
@@ -23,4 +27,4 @@ dt query --sql '
 viz --input latest:query --type line --x 月份 --y 已完成,配送中 \
   --title "各状态月度销售额" --output multi_line.png
 
-echo; echo "产物：grouped_bar.png  multi_line.png  以及 .dtool/（数据集与 Action 记录）"
+echo; echo "产物：grouped_bar.png  region_gap.png  multi_line.png  以及 .dtool/（数据集与 Action 记录）"

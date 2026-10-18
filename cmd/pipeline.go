@@ -40,6 +40,7 @@ func newPipelineCmd() *cobra.Command {
 	f.StringVar(&cfg.X, "x", "", "X 轴字段")
 	f.StringVar(&cfg.Y, "y", "", "Y 轴数值列，多个用逗号分隔：sales,profit")
 	f.StringVar(&cfg.GroupBy, "group-by", "", "按该字段拆分多系列（bar / line）")
+	f.StringVar(&cfg.Missing, "missing", "zero", "缺失组合处理：zero（补 0，默认）/ gap（置空，line 断线）")
 	f.StringVar(&cfg.Title, "title", "", "图表标题")
 	f.StringVar(&cfg.Format, "format", "png", "png / svg")
 	f.StringVar(&cfg.Font, "font", "", "TTF 字体路径")

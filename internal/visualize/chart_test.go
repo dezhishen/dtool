@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/dezhishen/dtool/pkg/types"
+	charts "github.com/vicanso/go-charts/v2"
 	"github.com/wcharczuk/go-chart/v2/roboto"
 )
 
@@ -196,7 +197,7 @@ const groupRows = `[
 
 func TestPivotOrderAndZeroFill(t *testing.T) {
 	_, r := rows(t, groupRows)
-	xs, names, series, err := pivot(r, "region", "quarter", "total")
+	xs, names, series, err := pivot(r, "region", "quarter", "total", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,13 +220,27 @@ func TestPivotOrderAndZeroFill(t *testing.T) {
 	}
 }
 
+func TestPivotGap(t *testing.T) {
+	_, r := rows(t, groupRows) // North 缺 Q2
+	_, _, series, err := pivot(r, "region", "quarter", "total", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := series[1][2]; got != charts.GetNullValue() {
+		t.Fatalf("missing cell = %v, want null sentinel", got)
+	}
+	if got := series[0][2]; got != 50 {
+		t.Fatalf("present cell = %v, want 50", got)
+	}
+}
+
 func TestPivotDuplicateCombinationRejected(t *testing.T) {
 	_, r := rows(t, `[
 	 {"region":"East","quarter":"Q1","total":10},
 	 {"region":"West","quarter":"Q1","total":20},
 	 {"region":"East","quarter":"Q1","total":30}
 	]`)
-	_, _, _, err := pivot(r, "region", "quarter", "total")
+	_, _, _, err := pivot(r, "region", "quarter", "total", false)
 	var te *types.Error
 	if !errors.As(err, &te) || !strings.Contains(te.Message, "重复") {
 		t.Fatalf("err = %v", err)
@@ -245,7 +260,7 @@ func TestPivotEmptyLabels(t *testing.T) {
 	 {"region":null,"quarter":"Q1","total":1},
 	 {"region":"East","quarter":null,"total":2}
 	]`)
-	xs, names, series, err := pivot(r, "region", "quarter", "total")
+	xs, names, series, err := pivot(r, "region", "quarter", "total", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +283,7 @@ func TestPivotTooManySeries(t *testing.T) {
 			Values:  []any{"East", fmt.Sprintf("Q%d", i), 1.0},
 		})
 	}
-	_, _, _, err := pivot(r, "region", "quarter", "total")
+	_, _, _, err := pivot(r, "region", "quarter", "total", false)
 	var te *types.Error
 	if !errors.As(err, &te) || !strings.Contains(te.Message, "too many series") {
 		t.Fatalf("err = %v", err)
@@ -280,7 +295,7 @@ func TestPivotTooManySeries(t *testing.T) {
 
 func TestPivotNonNumeric(t *testing.T) {
 	_, r := rows(t, `[{"region":"East","quarter":"Q1","total":"abc"}]`)
-	_, _, _, err := pivot(r, "region", "quarter", "total")
+	_, _, _, err := pivot(r, "region", "quarter", "total", false)
 	if err == nil || !strings.Contains(err.Error(), "not numeric") {
 		t.Fatalf("err = %v", err)
 	}
@@ -318,6 +333,41 @@ func TestRenderWithoutGroupByHasNoSeries(t *testing.T) {
 	}
 	if len(res.Series) != 0 {
 		t.Fatalf("single-series result should not report series: %v", res.Series)
+	}
+}
+
+// group-by 只有一个唯一值时，渲染必须与不传 group-by 逐字节一致。
+func TestRenderGroupBySingleSeriesMatchesPlain(t *testing.T) {
+	cols, r := rows(t, `[
+	 {"region":"North","quarter":"Q1","total":150},
+	 {"region":"South","quarter":"Q1","total":250.5}
+	]`)
+	plain := Options{Type: "bar", X: "region", Y: []string{"total"}, Title: "Sales", Format: "svg",
+		OutFile: filepath.Join(t.TempDir(), "plain.svg"), FontDirs: []string{t.TempDir()}}
+	one := plain
+	one.GroupBy = "quarter"
+	one.OutFile = filepath.Join(t.TempDir(), "one.svg")
+
+	if _, err := Render(cols, r, plain); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Render(cols, r, one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Series) != 0 {
+		t.Fatalf("single-group result should not report series: %v", res.Series)
+	}
+	b1, err := os.ReadFile(plain.OutFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, err := os.ReadFile(one.OutFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(normalizeEOL(b1), normalizeEOL(b2)) {
+		t.Fatal("single-group group-by should render identically to a plain chart")
 	}
 }
 
@@ -439,6 +489,91 @@ func TestRenderMultiYSVGGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden := filepath.Join("testdata", "wide_line.svg")
+	if *update {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(golden, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("%v (run: go test ./internal/visualize -update)", err)
+	}
+	if !bytes.Equal(normalizeEOL(b), normalizeEOL(want)) {
+		t.Errorf("svg differs from %s (run with -update to refresh)", golden)
+	}
+}
+
+func TestRenderMissingValidation(t *testing.T) {
+	cols, r := rows(t, groupRows)
+	base := func() Options {
+		return Options{Type: "line", X: "region", Y: []string{"total"}, GroupBy: "quarter", Format: "svg",
+			OutFile: filepath.Join(t.TempDir(), "out.svg"), FontDirs: []string{t.TempDir()}}
+	}
+	cases := []struct {
+		name string
+		mut  func(*Options)
+		code int
+		msg  string
+	}{
+		{"invalid", func(o *Options) { o.Missing = "nope" }, types.CodeUsage, "无效"},
+		{"bar gap", func(o *Options) { o.Type = "bar"; o.Missing = "gap" }, types.CodeUsage, "仅适用于 line"},
+		{"pie gap", func(o *Options) { o.Type = "pie"; o.Missing = "gap" }, types.CodeUsage, "仅适用于 line"},
+	}
+	for _, c := range cases {
+		o := base()
+		c.mut(&o)
+		_, err := Render(cols, r, o)
+		var te *types.Error
+		if !errors.As(err, &te) || te.Code != c.code || !strings.Contains(te.Message, c.msg) {
+			t.Errorf("%s: err = %v", c.name, err)
+		}
+	}
+
+	// table 忽略 --missing
+	o := base()
+	o.Type, o.Missing, o.OutFile = "table", "gap", filepath.Join(t.TempDir(), "out.md")
+	if _, err := Render(cols, r, o); err != nil {
+		t.Fatalf("table should ignore --missing: %v", err)
+	}
+}
+
+func TestRenderMissingGapSVGGolden(t *testing.T) {
+	cols, r := rows(t, groupRows)
+	o := Options{Type: "line", X: "region", Y: []string{"total"}, GroupBy: "quarter", Missing: "gap",
+		Title: "Sales by Quarter", Format: "svg",
+		OutFile: filepath.Join(t.TempDir(), "gap.svg"), FontDirs: []string{t.TempDir()}}
+	res, err := Render(cols, r, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Missing != "gap" {
+		t.Fatalf("missing = %q", res.Missing)
+	}
+	b, err := os.ReadFile(o.OutFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 与补 0 的输出必须不同（否则 gap 没有生效）
+	zero := o
+	zero.Missing = "zero"
+	zero.OutFile = filepath.Join(t.TempDir(), "zero.svg")
+	if _, err := Render(cols, r, zero); err != nil {
+		t.Fatal(err)
+	}
+	zb, err := os.ReadFile(zero.OutFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(normalizeEOL(b), normalizeEOL(zb)) {
+		t.Fatal("gap output should differ from zero fill")
+	}
+
+	golden := filepath.Join("testdata", "grouped_line_gap.svg")
 	if *update {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)

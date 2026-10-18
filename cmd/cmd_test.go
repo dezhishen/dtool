@@ -635,6 +635,18 @@ func TestVisualizeGroupBy(t *testing.T) {
 	if len(series) != 2 || series[0] != "Q1" || series[1] != "Q2" {
 		t.Fatalf("series = %v", got["series"])
 	}
+	// Action input 记录系列数与系列名
+	show, err := run(t, "actions", "show", got["action_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, _ := show["input"].(map[string]any)
+	if input["series_count"].(float64) != 2 {
+		t.Fatalf("action series_count = %v", input["series_count"])
+	}
+	if ss, _ := input["series"].([]any); len(ss) != 2 || ss[0] != "Q1" || ss[1] != "Q2" {
+		t.Fatalf("action series = %v", input["series"])
+	}
 	b, err := os.ReadFile(got["file"].(string))
 	if err != nil || !strings.Contains(string(b), "Q1") {
 		t.Fatalf("chart file: %v", err)
@@ -708,5 +720,48 @@ func TestVisualizeMultiY(t *testing.T) {
 	if _, err := run(t, "visualize", "--input", data, "--type", "table",
 		"--y", "sales,profit", "--group-by", "month", "--format", "md"); err != nil {
 		t.Fatalf("table should ignore multi-series params: %v", err)
+	}
+}
+
+func TestVisualizeMissing(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := filepath.Join(dir, "gap.json")
+	os.WriteFile(data, []byte(`[
+	 {"region":"East","quarter":"Q1","total":10},
+	 {"region":"West","quarter":"Q1","total":20},
+	 {"region":"East","quarter":"Q2","total":30}
+	]`), 0o644)
+
+	got, err := run(t, "visualize", "--input", data, "--type", "line",
+		"--x", "region", "--y", "total", "--group-by", "quarter", "--missing", "gap", "--format", "svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["missing"] != "gap" {
+		t.Fatalf("missing = %v", got["missing"])
+	}
+	show, err := run(t, "actions", "show", got["action_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if show["input"].(map[string]any)["missing"] != "gap" {
+		t.Fatalf("action input missing = %v", show["input"])
+	}
+
+	// 参数错误：非法值 / bar 不支持 gap
+	for _, c := range []struct {
+		name string
+		args []string
+		msg  string
+	}{
+		{"invalid", []string{"--type", "line", "--x", "region", "--y", "total", "--group-by", "quarter", "--missing", "nope"}, "无效"},
+		{"bar gap", []string{"--type", "bar", "--x", "region", "--y", "total", "--group-by", "quarter", "--missing", "gap"}, "仅适用于 line"},
+	} {
+		args := append([]string{"visualize", "--input", data}, c.args...)
+		m, err := run(t, args...)
+		if err == nil || m["code"].(float64) != 2 || !strings.Contains(m["error"].(string), c.msg) {
+			t.Errorf("%s: %v %v", c.name, m, err)
+		}
 	}
 }
