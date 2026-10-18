@@ -63,6 +63,7 @@ dtool query --sql 'SELECT region, SUM(amount) AS total FROM sales GROUP BY regio
 # 3. 出图 / 导出
 dtool visualize --input latest:query --type bar --x region --y total --title "区域销量" --output out/sales.png
 dtool visualize --input latest:query --type bar --x region --y total --group-by quarter  # 分组柱 / 多条折线
+dtool visualize --input latest:query --type line --x month --y sales,profit            # 宽表多列 → 多折线
 dtool query --sql '...' --format xlsx --output out/report.xlsx
 
 # 一条龙（各步骤可选）
@@ -79,7 +80,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `meminfo [--source alias=文件]...` | 内存排查入口：预算来源（cgroup / Job Object / 系统可用内存 / `--max-memory`）、原始探测字段（`job_object`）、看门狗开关，以及按当前输入的**预检预演**（`verdict: ok/borderline/risky/forced`，以及选中的执行档 `plan.chosen` 与理由——预检与真正执行走同一套选档逻辑）。受限环境里「预检为什么没拦住」先跑它 |
 | `datasets list \| show <name> \| delete <name>` | 查阅/删除数据集；回答"有哪些数据、长什么样"用这个 |
 | `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
-| `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y [--group-by G] [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y；y 必须是数值列；`--group-by` 仅 bar/line，拆分多系列，缺失组合补 0，重复 (x, group) 报错 |
+| `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y[,Y2...] [--group-by G] [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y，且忽略多系列参数；y 必须是数值列；`--group-by`（长表透视）与多 `--y`（宽表直取）互斥，均仅 bar/line，不能与 x/y 同列；缺失组合补 0，重复 (x, group) 报错 |
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，会在 ~0.25s 内被看护进程落盘收敛，见下） |
 | `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |

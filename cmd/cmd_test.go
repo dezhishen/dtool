@@ -642,7 +642,7 @@ func TestVisualizeGroupBy(t *testing.T) {
 
 	// 饼图是单系列，带 group-by 必须明确拒绝
 	if errOut, err := runStreams(t, "visualize", "--input", data, "--type", "pie",
-		"--x", "region", "--y", "total", "--group-by", "quarter"); err == nil || !strings.Contains(errOut, "不适用于饼图") {
+		"--x", "region", "--y", "total", "--group-by", "quarter"); err == nil || !strings.Contains(errOut, "不支持多系列") {
 		t.Fatalf("pie accepted --group-by: %v %q", err, errOut)
 	}
 
@@ -655,5 +655,58 @@ func TestVisualizeGroupBy(t *testing.T) {
 	chart, _ := pipe["chart"].(map[string]any)
 	if chart["group_by"] != "quarter" || len(chart["series"].([]any)) != 2 {
 		t.Fatalf("pipeline chart = %v", pipe["chart"])
+	}
+}
+
+func TestVisualizeMultiY(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := filepath.Join(dir, "wide.json")
+	os.WriteFile(data, []byte(`[
+	 {"month":"Jan","sales":10,"profit":3},
+	 {"month":"Feb","sales":20,"profit":5}
+	]`), 0o644)
+
+	got, err := run(t, "visualize", "--input", data, "--type", "line",
+		"--x", "month", "--y", "sales,profit", "--format", "svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	series, _ := got["series"].([]any)
+	if len(series) != 2 || series[0] != "sales" || series[1] != "profit" {
+		t.Fatalf("series = %v", got["series"])
+	}
+	// Action input 的 y 必须是数组
+	show, err := run(t, "actions", "show", got["action_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ys, _ := show["input"].(map[string]any)["y"].([]any)
+	if len(ys) != 2 || ys[0] != "sales" || ys[1] != "profit" {
+		t.Fatalf("action input y = %#v", show["input"])
+	}
+
+	// 参数错误：互斥 / 同列 / pie 多系列，退出码 2
+	for _, c := range []struct {
+		name string
+		args []string
+		msg  string
+	}{
+		{"mutex", []string{"--type", "line", "--x", "month", "--y", "sales,profit", "--group-by", "month"}, "不能同时使用"},
+		{"group=x", []string{"--type", "line", "--x", "month", "--y", "sales", "--group-by", "month"}, "不能与 --x 相同"},
+		{"group=y", []string{"--type", "line", "--x", "month", "--y", "sales", "--group-by", "sales"}, "不能与 --y 相同"},
+		{"pie", []string{"--type", "pie", "--x", "month", "--y", "sales,profit"}, "不支持多系列"},
+	} {
+		args := append([]string{"visualize", "--input", data}, c.args...)
+		m, err := run(t, args...)
+		if err == nil || m["code"].(float64) != float64(2) || !strings.Contains(m["error"].(string), c.msg) {
+			t.Errorf("%s: %v %v", c.name, m, err)
+		}
+	}
+
+	// 表格忽略多系列参数
+	if _, err := run(t, "visualize", "--input", data, "--type", "table",
+		"--y", "sales,profit", "--group-by", "month", "--format", "md"); err != nil {
+		t.Fatalf("table should ignore multi-series params: %v", err)
 	}
 }

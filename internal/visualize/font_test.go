@@ -189,7 +189,7 @@ func TestFontWithoutLatinWarns(t *testing.T) {
 	sys := t.TempDir()
 	write(t, sys, "DroidSansFallback.ttf", withPad(roboto.Roboto))
 	t.Setenv("DTOOL_FONT", "")
-	res, err := Render(cols, r, Options{Type: "bar", X: "区域", Y: "销量", Format: "svg",
+	res, err := Render(cols, r, Options{Type: "bar", X: "区域", Y: []string{"销量"}, Format: "svg",
 		OutFile: filepath.Join(t.TempDir(), "o.svg"), FontDirs: []string{sys}})
 	if err != nil || len(res.Warnings) != 1 || res.Font == "" {
 		t.Fatalf("%+v %v", res, err)

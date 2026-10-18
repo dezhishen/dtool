@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -341,7 +342,7 @@ func TestXLSXFormatValidation(t *testing.T) {
 	}
 	q, _ := env.Query(QueryParams{SQL: `SELECT 1 AS x`, Sandbox: true}, "")
 	for _, typ := range []string{"bar", "pie"} {
-		if _, err := env.Visualize(VisualizeParams{Input: "action:" + q.ActionID, Type: typ, X: "x", Y: "x", Format: "xlsx"}, ""); err == nil {
+		if _, err := env.Visualize(VisualizeParams{Input: "action:" + q.ActionID, Type: typ, X: "x", Y: []string{"x"}, Format: "xlsx"}, ""); err == nil {
 			t.Errorf("%s accepted xlsx", typ)
 		}
 	}
@@ -377,6 +378,9 @@ func TestPipelineGroupByChart(t *testing.T) {
 	if a.Input["group_by"] != "quarter" {
 		t.Fatalf("action input should record group_by: %v", a.Input)
 	}
+	if ys, ok := a.Input["y"].([]any); !ok || len(ys) != 1 || ys[0] != "total" {
+		t.Fatalf("action input y should be an array: %v", a.Input["y"])
+	}
 	if got := a.Output.Details["series"]; got == nil {
 		t.Fatalf("details should record series: %v", a.Output.Details)
 	}
@@ -396,5 +400,42 @@ func TestPipelineGroupByChart(t *testing.T) {
 	}
 	if failed, _, _ := env.Rec.List(action.Filter{Type: "visualize", Status: action.StatusFailed}); len(failed) == 0 {
 		t.Fatal("failed visualize action should be recorded")
+	}
+}
+
+// 宽表直取：--y 的多列各成一个系列，Action 里 y 以数组记录。
+func TestPipelineMultiYChart(t *testing.T) {
+	env, dir := newEnv(t)
+	data := filepath.Join(dir, "wide.json")
+	os.WriteFile(data, []byte(`[
+	 {"month":"Jan","sales":10,"profit":3},
+	 {"month":"Feb","sales":20,"profit":5}
+	]`), 0o644)
+
+	res, err := env.Pipeline(Config{Input: data, SQL: `SELECT month, sales, profit FROM data`,
+		Chart: "line", X: "month", Y: "sales,profit", Format: "svg",
+		MaxRows: 100, Timeout: 30 * time.Second, Sandbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Chart.Series, []string{"sales", "profit"}) {
+		t.Fatalf("series = %v", res.Chart.Series)
+	}
+	a, err := env.Rec.Get(res.Chart.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ys, ok := a.Input["y"].([]any)
+	if !ok || len(ys) != 2 || ys[0] != "sales" || ys[1] != "profit" {
+		t.Fatalf("action input y = %#v", a.Input["y"])
+	}
+
+	// --group-by 与多 --y 互斥
+	_, err = env.Pipeline(Config{Input: data, SQL: `SELECT month, sales, profit FROM data`,
+		Chart: "line", X: "month", Y: "sales,profit", GroupBy: "month", Format: "svg",
+		MaxRows: 100, Timeout: 30 * time.Second, Sandbox: true})
+	var te *types.Error
+	if !errors.As(err, &te) || te.Code != types.CodeUsage || !strings.Contains(te.Message, "不能同时使用") {
+		t.Fatalf("mutex: %v", err)
 	}
 }

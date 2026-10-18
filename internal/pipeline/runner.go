@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dezhishen/dtool/internal/action"
+	"github.com/dezhishen/dtool/internal/visualize"
 	"github.com/dezhishen/dtool/pkg/types"
 )
 
@@ -38,9 +39,13 @@ func (e *Env) Pipeline(c Config) (*types.PipelineResult, error) {
 
 	var parent *action.Action
 	if !e.NoRecord {
+		input := map[string]any{"excel": c.Excel, "input": c.Input, "sql": c.SQL, "chart": c.Chart, "x": c.X}
+		if y := visualize.ParseY(c.Y); len(y) != 0 {
+			input["y"] = y // Action 里 y 统一记录为数组
+		}
 		var err error
 		parent, err = e.Rec.Start(action.StartParams{Type: "pipeline", Command: e.Command, Metadata: e.Meta,
-			Input: map[string]any{"excel": c.Excel, "input": c.Input, "sql": c.SQL, "chart": c.Chart, "x": c.X, "y": c.Y}})
+			Input: input})
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +99,7 @@ func (e *Env) Pipeline(c Config) (*types.PipelineResult, error) {
 
 		if c.Chart != "" {
 			ch, err := e.Visualize(VisualizeParams{Input: e.WS.Abs(q.ResultFile), From: fromRef(q.ActionID),
-				Type: c.Chart, X: c.X, Y: c.Y, GroupBy: c.GroupBy, Title: c.Title, Format: c.Format,
+				Type: c.Chart, X: c.X, Y: visualize.ParseY(c.Y), GroupBy: c.GroupBy, Title: c.Title, Format: c.Format,
 				Output: c.Output, Font: c.Font}, pid)
 			if err != nil {
 				return fail("visualize", err)

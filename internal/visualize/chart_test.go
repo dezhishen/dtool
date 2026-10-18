@@ -34,7 +34,7 @@ const regionRows = `[{"region":"North","total":150},{"region":"South","total":25
 
 func opt(t *testing.T, typ, format string) Options {
 	t.Helper()
-	return Options{Type: typ, X: "region", Y: "total", Title: "Sales", Format: format,
+	return Options{Type: typ, X: "region", Y: []string{"total"}, Title: "Sales", Format: format,
 		OutFile: filepath.Join(t.TempDir(), "out."+Ext(typ, format)), FontDirs: []string{t.TempDir()}}
 }
 
@@ -103,7 +103,7 @@ func TestRenderFieldValidation(t *testing.T) {
 		want string
 	}{
 		{"missing x", func(o *Options) { o.X = "nope" }, "field not found"},
-		{"missing y", func(o *Options) { o.Y = "nope" }, "field not found"},
+		{"missing y", func(o *Options) { o.Y = []string{"nope"} }, "field not found"},
 		{"non numeric", func(o *Options) {}, "not numeric"},
 		{"bad type", func(o *Options) { o.Type = "radar" }, "unsupported chart type"},
 	}
@@ -145,7 +145,7 @@ func TestRenderTooManyPoints(t *testing.T) {
 func TestChineseWithoutFontWarnsAndWithFontUsesIt(t *testing.T) {
 	stubCoverage(t)
 	cols, r := rows(t, `[{"区域":"北","销量":3},{"区域":"南","销量":5}]`)
-	o := Options{Type: "bar", X: "区域", Y: "销量", Title: "销售", Format: "svg",
+	o := Options{Type: "bar", X: "区域", Y: []string{"销量"}, Title: "销售", Format: "svg",
 		OutFile: filepath.Join(t.TempDir(), "c.svg"), FontDirs: []string{t.TempDir()}}
 	t.Setenv("DTOOL_FONT", "")
 	res, err := Render(cols, r, o)
@@ -288,23 +288,23 @@ func TestPivotNonNumeric(t *testing.T) {
 
 func TestRenderGroupByRejected(t *testing.T) {
 	cols, r := rows(t, groupRows)
-	cases := []struct{ typ, hint string }{
-		{"pie", "bar / line"},
-		{"table", "SQL"},
+	// pie 是单系列：group-by 明确拒绝
+	_, err := Render(cols, r, Options{Type: "pie", X: "region", Y: []string{"total"}, GroupBy: "quarter", Format: "svg",
+		OutFile: filepath.Join(t.TempDir(), "out.svg")})
+	var te *types.Error
+	if !errors.As(err, &te) || !strings.Contains(te.Message, "不支持多系列") || !strings.Contains(te.Hint, "bar 或 line") {
+		t.Fatalf("pie: err = %v", err)
 	}
-	for _, c := range cases {
-		o := Options{Type: c.typ, X: "region", Y: "total", GroupBy: "quarter", Format: "svg",
-			OutFile: filepath.Join(t.TempDir(), "out.svg")}
-		_, err := Render(cols, r, o)
-		var te *types.Error
-		if !errors.As(err, &te) || !strings.Contains(te.Hint, c.hint) {
-			t.Errorf("%s: err = %v", c.typ, err)
-		}
+
+	// table 按原始行导出，多系列参数直接忽略
+	if _, err := Render(cols, r, Options{Type: "table", X: "region", Y: []string{"total"}, GroupBy: "quarter",
+		Format: "svg", OutFile: filepath.Join(t.TempDir(), "out.md")}); err != nil {
+		t.Fatalf("table should ignore multi-series params: %v", err)
 	}
+
 	o := opt(t, "bar", "svg")
 	o.GroupBy = "month"
-	_, err := Render(cols, r, o)
-	var te *types.Error
+	_, err = Render(cols, r, o)
 	if !errors.As(err, &te) || !strings.Contains(te.Message, `"month"`) || !strings.Contains(te.Detail, "quarter") {
 		t.Fatalf("missing group field: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestRenderWithoutGroupByHasNoSeries(t *testing.T) {
 func TestRenderGroupBySVGGolden(t *testing.T) {
 	cols, r := rows(t, groupRows)
 	for _, typ := range []string{"bar", "line"} {
-		o := Options{Type: typ, X: "region", Y: "total", GroupBy: "quarter",
+		o := Options{Type: typ, X: "region", Y: []string{"total"}, GroupBy: "quarter",
 			Title: "Sales by Quarter", Format: "svg",
 			OutFile: filepath.Join(t.TempDir(), "chart.svg"), FontDirs: []string{t.TempDir()}}
 		res, err := Render(cols, r, o)
@@ -379,3 +379,125 @@ func TestRenderGroupBySVGGolden(t *testing.T) {
 
 // normalizeEOL 抹平 CRLF/LF 差异（Windows checkout 与 CI golden 比较用）。
 func normalizeEOL(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")) }
+
+func TestParseY(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"total", []string{"total"}},
+		{" sales , profit ", []string{"sales", "profit"}},
+		{"a,, b ,", []string{"a", "b"}},
+		{"", nil},
+	}
+	for _, c := range cases {
+		if got := ParseY(c.in); !slices.Equal(got, c.want) {
+			t.Errorf("ParseY(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+const wideRows = `[
+ {"month":"Jan","sales":10,"profit":3},
+ {"month":"Feb","sales":20,"profit":5},
+ {"month":"Mar","sales":15,"profit":8}
+]`
+
+func TestRenderMultiY(t *testing.T) {
+	cols, r := rows(t, wideRows)
+	o := Options{Type: "line", X: "month", Y: []string{"sales", "profit"},
+		Title: "Sales and Profit", Format: "svg",
+		OutFile: filepath.Join(t.TempDir(), "out.svg"), FontDirs: []string{t.TempDir()}}
+	res, err := Render(cols, r, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"sales", "profit"}; !slices.Equal(res.Series, want) {
+		t.Fatalf("series = %v", res.Series)
+	}
+	b, err := os.ReadFile(o.OutFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range res.Series {
+		if !strings.Contains(string(b), name) {
+			t.Errorf("legend %q missing from svg", name)
+		}
+	}
+}
+
+func TestRenderMultiYSVGGolden(t *testing.T) {
+	cols, r := rows(t, wideRows)
+	o := Options{Type: "line", X: "month", Y: []string{"sales", "profit"},
+		Title: "Sales and Profit", Format: "svg",
+		OutFile: filepath.Join(t.TempDir(), "out.svg"), FontDirs: []string{t.TempDir()}}
+	if _, err := Render(cols, r, o); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(o.OutFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := filepath.Join("testdata", "wide_line.svg")
+	if *update {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(golden, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("%v (run: go test ./internal/visualize -update)", err)
+	}
+	if !bytes.Equal(normalizeEOL(b), normalizeEOL(want)) {
+		t.Errorf("svg differs from %s (run with -update to refresh)", golden)
+	}
+}
+
+func TestRenderMultiYValidation(t *testing.T) {
+	cols, r := rows(t, wideRows)
+	base := func() Options {
+		return Options{Type: "bar", X: "month", Y: []string{"sales"}, Format: "svg",
+			OutFile: filepath.Join(t.TempDir(), "out.svg"), FontDirs: []string{t.TempDir()}}
+	}
+	cases := []struct {
+		name string
+		mut  func(*Options)
+		code int
+		msg  string
+	}{
+		{"mutex", func(o *Options) { o.Y = []string{"sales", "profit"}; o.GroupBy = "month" },
+			types.CodeUsage, "不能同时使用"},
+		{"group = x", func(o *Options) { o.GroupBy = "month" }, types.CodeUsage, "不能与 --x 相同"},
+		{"group = y", func(o *Options) { o.GroupBy = "sales" }, types.CodeUsage, "不能与 --y 相同"},
+		{"pie multi y", func(o *Options) { o.Type = "pie"; o.Y = []string{"sales", "profit"} },
+			types.CodeUsage, "不支持多系列"},
+		{"duplicate y", func(o *Options) { o.Y = []string{"sales", "sales"} },
+			types.CodeUsage, "列重复"},
+		{"empty y", func(o *Options) { o.Y = nil }, types.CodeUsage, "缺少 --y"},
+		{"missing y", func(o *Options) { o.Y = []string{"nope"} }, types.CodeExec, "field not found"},
+		{"non numeric", func(o *Options) { o.Y = []string{"month"} }, types.CodeExec, "not numeric"},
+	}
+	for _, c := range cases {
+		o := base()
+		c.mut(&o)
+		_, err := Render(cols, r, o)
+		var te *types.Error
+		if !errors.As(err, &te) || te.Code != c.code || !strings.Contains(te.Message, c.msg) {
+			t.Errorf("%s: err = %v", c.name, err)
+		}
+	}
+
+	// 表格忽略多系列参数（x/y/group-by 不参与渲染）
+	o := base()
+	o.Type, o.Format = "table", "svg"
+	o.Y = []string{"sales", "profit"}
+	o.GroupBy, o.X = "month", ""
+	o.OutFile = filepath.Join(t.TempDir(), "out.md")
+	if _, err := Render(cols, r, o); err != nil {
+		t.Fatalf("table should ignore multi-series params: %v", err)
+	}
+}

@@ -38,7 +38,7 @@ func newPipelineCmd() *cobra.Command {
 	f.StringVar(&cfg.SQL, "sql", "", `SQL（可省略，省略则只转换），例如 SELECT region, SUM(amount) AS total FROM data GROUP BY region`)
 	f.StringVar(&cfg.Chart, "chart", "", "图表类型 bar / line / pie / table，留空则不出图")
 	f.StringVar(&cfg.X, "x", "", "X 轴字段")
-	f.StringVar(&cfg.Y, "y", "", "Y 轴字段")
+	f.StringVar(&cfg.Y, "y", "", "Y 轴数值列，多个用逗号分隔：sales,profit")
 	f.StringVar(&cfg.GroupBy, "group-by", "", "按该字段拆分多系列（bar / line）")
 	f.StringVar(&cfg.Title, "title", "", "图表标题")
 	f.StringVar(&cfg.Format, "format", "png", "png / svg")

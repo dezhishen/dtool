@@ -20,7 +20,9 @@ const (
 
 type Options struct {
 	Type string // bar / line / pie / table
-	X, Y string
+	X    string
+	// Y 是数值列：一个列单系列；多个列各成一个系列（宽表直取）。
+	Y []string
 	// GroupBy 非空时按该字段拆分多系列（仅 bar / line）：每个系列是一条线或一组柱子。
 	GroupBy  string
 	Title    string
@@ -93,14 +95,22 @@ func toFloat(v any) (float64, bool) {
 	return 0, false
 }
 
+// ParseY 把 --y 的逗号分隔列名拆开：去空白、忽略空项，保留书写顺序。
+func ParseY(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // Render 校验字段并渲染图表/表格到 o.OutFile。
 func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 	res := &Result{Points: len(rows)}
-	if o.Type == "table" && o.GroupBy != "" {
-		return nil, types.Errorf(types.CodeUsage, "--group-by 不适用于表格输出").
-			WithHint("表格会原样导出结果；需要透视请先在 SQL 里 GROUP BY 汇总")
-	}
 	if o.Type == "table" {
+		// 表格按原始行导出，x/y/group-by 不参与渲染，直接忽略。
 		f, err := os.Create(o.OutFile)
 		if err != nil {
 			return nil, err
@@ -120,20 +130,42 @@ func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 		return nil, types.Errorf(types.CodeUsage, "unsupported chart type %q", o.Type).
 			WithHint("可选: bar / line / pie / table")
 	}
+	if len(o.Y) == 0 {
+		return nil, types.Errorf(types.CodeUsage, "缺少 --y 数值列").
+			WithHint("用 --y col 或 --y col1,col2 指定一个或多个数值列")
+	}
 	avail := "available columns: " + strings.Join(cols, ", ")
-	for _, f := range []string{o.X, o.Y} {
+	seenY := map[string]bool{}
+	for _, f := range o.Y {
+		if seenY[f] {
+			return nil, types.Errorf(types.CodeUsage, "--y 列重复: %q", f)
+		}
+		seenY[f] = true
 		if !contains(cols, f) {
 			return nil, types.Errorf(types.CodeExec, "field not found: %q", f).WithDetail(avail)
 		}
 	}
+	if !contains(cols, o.X) {
+		return nil, types.Errorf(types.CodeExec, "field not found: %q", o.X).WithDetail(avail)
+	}
 	if o.GroupBy != "" {
-		if o.Type == "pie" {
-			return nil, types.Errorf(types.CodeUsage, "--group-by 不适用于饼图").
-				WithHint("饼图只画一个系列；请先聚合，或改用 bar / line 画分组图")
+		if len(o.Y) > 1 {
+			return nil, types.Errorf(types.CodeUsage, "--group-by 与多 --y 不能同时使用").
+				WithHint("--group-by 用于长表透视，多 --y 用于宽表直取，二者选其一")
+		}
+		if o.GroupBy == o.X {
+			return nil, types.Errorf(types.CodeUsage, "--group-by 不能与 --x 相同")
+		}
+		if o.GroupBy == o.Y[0] {
+			return nil, types.Errorf(types.CodeUsage, "--group-by 不能与 --y 相同")
 		}
 		if !contains(cols, o.GroupBy) {
 			return nil, types.Errorf(types.CodeExec, "field not found: %q", o.GroupBy).WithDetail(avail)
 		}
+	}
+	if o.Type == "pie" && (o.GroupBy != "" || len(o.Y) > 1) {
+		return nil, types.Errorf(types.CodeUsage, "pie 不支持多系列（--group-by / 多 --y）").
+			WithHint("请改用 --type bar 或 line；饼图请先用 SQL 聚合到单一系列")
 	}
 	if len(rows) == 0 {
 		return nil, types.Errorf(types.CodeExec, "no data to plot")
@@ -143,27 +175,38 @@ func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 			WithHint("在查询中加 LIMIT 或先聚合")
 	}
 	xs := make([]string, len(rows))
-	ys := make([]float64, len(rows))
 	for i, r := range rows {
 		xv, _ := r.Get(o.X)
 		xs[i] = formatter.Cell(xv)
-		yv, _ := r.Get(o.Y)
-		f, ok := toFloat(yv)
-		if !ok {
-			return nil, types.Errorf(types.CodeExec, "field %q is not numeric (row %d: %v)", o.Y, i+1, yv).
-				WithDetail(avail)
-		}
-		ys[i] = f
 	}
-	series, names := [][]float64{ys}, []string(nil)
+	var series [][]float64
+	var names []string
 	if o.GroupBy != "" {
 		var err error
-		xs, names, series, err = pivot(rows, o.X, o.GroupBy, o.Y)
+		xs, names, series, err = pivot(rows, o.X, o.GroupBy, o.Y[0])
 		if err != nil {
 			return nil, err
 		}
-		res.Series = names
+	} else {
+		series = make([][]float64, len(o.Y))
+		for yi, col := range o.Y {
+			vals := make([]float64, len(rows))
+			for i, r := range rows {
+				yv, _ := r.Get(col)
+				f, ok := toFloat(yv)
+				if !ok {
+					return nil, types.Errorf(types.CodeExec, "field %q is not numeric (row %d: %v)", col, i+1, yv).
+						WithDetail(avail)
+				}
+				vals[i] = f
+			}
+			series[yi] = vals
+		}
+		if len(o.Y) > 1 {
+			names = append([]string(nil), o.Y...)
+		}
 	}
+	res.Series = names
 
 	opts := []charts.OptionFunc{charts.TitleOptionFunc(charts.TitleOption{Text: o.Title})}
 	if o.Format == "svg" {
@@ -171,7 +214,7 @@ func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 	} else {
 		opts = append(opts, charts.PNGTypeOption())
 	}
-	extra := []string{o.X, o.Y}
+	extra := append([]string{o.X}, o.Y...)
 	extra = append(extra, names...)
 	if o.GroupBy != "" {
 		extra = append(extra, o.GroupBy)
@@ -207,7 +250,7 @@ func Render(cols []string, rows []types.Row, o Options) (*Result, error) {
 	case "pie":
 		// 扇区标签已带名称与占比，隐藏图例以免与标题重叠
 		hide := false
-		p, err = charts.PieRender(ys, append(opts, charts.LegendOptionFunc(charts.LegendOption{Data: xs, Show: &hide}),
+		p, err = charts.PieRender(series[0], append(opts, charts.LegendOptionFunc(charts.LegendOption{Data: xs, Show: &hide}),
 			charts.PieSeriesShowLabel())...)
 	}
 	if err != nil {

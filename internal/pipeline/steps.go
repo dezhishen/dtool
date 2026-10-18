@@ -270,7 +270,8 @@ func writeFormatted(path, format string, r *types.QueryResult) error {
 }
 
 type VisualizeParams struct {
-	Input, Type, X, Y, GroupBy, Title, Format, Output, Font, From string
+	Input, Type, X, GroupBy, Title, Format, Output, Font, From string
+	Y                                                          []string
 }
 
 func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeResult, error) {
@@ -287,8 +288,11 @@ func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeRes
 	if p.Format == "" {
 		p.Format = "png"
 	}
-	input := map[string]any{"input": p.Input, "type": p.Type, "x": p.X, "y": p.Y,
+	input := map[string]any{"input": p.Input, "type": p.Type, "x": p.X,
 		"title": p.Title, "format": p.Format}
+	if len(p.Y) != 0 {
+		input["y"] = p.Y
+	}
 	if p.GroupBy != "" {
 		input["group_by"] = p.GroupBy
 	}
@@ -314,7 +318,10 @@ func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeRes
 		}
 		res = &types.VisualizeResult{Success: true, File: e.WS.Rel(file), Type: p.Type, X: p.X, Y: p.Y,
 			GroupBy: p.GroupBy, Series: vr.Series, Points: vr.Points, Warnings: vr.Warnings}
-		details := map[string]any{"type": p.Type, "x": p.X, "y": p.Y, "points": vr.Points, "font": vr.Font}
+		details := map[string]any{"type": p.Type, "x": p.X, "points": vr.Points, "font": vr.Font}
+		if len(p.Y) != 0 {
+			details["y"] = p.Y
+		}
 		if p.GroupBy != "" {
 			details["group_by"] = p.GroupBy
 			details["series"] = vr.Series

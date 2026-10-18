@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"github.com/dezhishen/dtool/internal/pipeline"
+	"github.com/dezhishen/dtool/internal/visualize"
 	"github.com/spf13/cobra"
 )
 
 func newVisualizeCmd() *cobra.Command {
 	var p pipeline.VisualizeParams
+	var yFlag string
 	c := &cobra.Command{
 		Use:   "visualize",
 		Short: "结果 → 图表（bar/line/pie，PNG/SVG）或表格（Markdown）",
@@ -20,6 +22,7 @@ func newVisualizeCmd() *cobra.Command {
 				}
 			}
 			p.From = g.from
+			p.Y = visualize.ParseY(yFlag)
 			applyFont(c, &p.Font)
 			env, err := newEnv(c.Context())
 			if err != nil {
@@ -36,7 +39,7 @@ func newVisualizeCmd() *cobra.Command {
 	f.StringVar(&p.Input, "input", "", "数据来源：文件 / dataset:<name> / action:<id> / latest:<type>")
 	f.StringVar(&p.Type, "type", "", "bar / line / pie / table")
 	f.StringVar(&p.X, "x", "", "X 轴字段")
-	f.StringVar(&p.Y, "y", "", "Y 轴字段（数值）")
+	f.StringVar(&yFlag, "y", "", "Y 轴数值列，多个用逗号分隔：sales,profit")
 	f.StringVar(&p.GroupBy, "group-by", "", "按该字段拆分多系列（bar / line）：如 region × quarter")
 	f.StringVar(&p.Title, "title", "", "标题")
 	f.StringVar(&p.Output, "output", "", "输出文件，默认写入工作区产物目录")

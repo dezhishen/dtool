@@ -116,7 +116,7 @@ type VisualizeResult struct {
 	File     string   `json:"file"`
 	Type     string   `json:"type"`
 	X        string   `json:"x,omitempty"`
-	Y        string   `json:"y,omitempty"`
+	Y        []string `json:"y,omitempty"`
 	GroupBy  string   `json:"group_by,omitempty"`
 	Series   []string `json:"series,omitempty"`
 	Points   int      `json:"points"`

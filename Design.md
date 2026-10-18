@@ -440,6 +440,8 @@ dtool visualize \
 
 # 多系列：各区域 × 各季度（bar = 分组柱，line = 多条折线）
 dtool visualize --input action:01HX...B --type bar --x region --y total --group-by quarter
+# 宽表直取：一条 SQL 已算出多个指标列，每个 --y 列一个系列
+dtool visualize --input action:01HX...B --type line --x month --y sales,profit
 ```
 
 | 参数 | 必填 | 说明 |
@@ -447,8 +449,8 @@ dtool visualize --input action:01HX...B --type bar --x region --y total --group-
 | `--input` | 是 | 数据来源，支持文件路径、`action:<id>`、`latest:query` |
 | `--type` | 是 | 图表类型：`bar` / `line` / `pie` / `table` |
 | `--x` | 是* | X 轴字段（表格类型可省略） |
-| `--y` | 是* | Y 轴字段（需为数值列，校验失败时报错并列出可用的数值列） |
-| `--group-by` | 否 | 按该字段拆分多系列（仅 `bar` / `line`）；分类与系列按输入顺序（`ORDER BY`）排列，缺失组合补 0，同一 `(x, group)` 重复出现会报错并提示先聚合；系列数上限 50 |
+| `--y` | 是* | Y 轴数值列；多个列用逗号分隔（如 `sales,profit`），每个列一个系列 |
+| `--group-by` | 否 | 按该字段拆分多系列（仅 `bar` / `line`，与多 `--y` 互斥）；分类与系列按输入顺序（`ORDER BY`）排列，缺失组合补 0，同一 `(x, group)` 重复出现会报错并提示先聚合；不能与 `--x` / `--y` 同列；系列数上限 50 |
 | `--title` | 否 | 图表标题 |
 | `--output` | 否 | 输出文件，默认写入 `.dtool/outputs/charts/<action-id>/` |
 | `--format` | 否 | 图表：`png` / `svg`；`--type table` 时可选 `md`（默认）/ `xlsx` |

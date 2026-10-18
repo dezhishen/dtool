@@ -1,6 +1,6 @@
 # 示例
 
-四个可直接运行的示例，数据源在 [data/](data/)（由 `make examples-data` 用固定随机种子生成，可复现）。
+五个可直接运行的示例，数据源在 [data/](data/)（由 `make examples-data` 用固定随机种子生成，可复现）。
 
 ```bash
 make build                    # 先构建 dtool
@@ -20,6 +20,7 @@ bash examples/01-sales-report/run.sh   # 单个示例
 | [02-hr-analysis](02-hr-analysis/README.md) | HR 花名册：看部门人力与薪酬、挑出没打绩效的人、导名单 | `hr.xlsx`（员工 60 行） | 前导零工号保持文本、可空列与枚举 Schema、饼图、按日期过滤导出 CSV、`IS NULL` 查询并导出 Excel 表格 |
 | [03-messy-data](03-messy-data/README.md) | 同事手工做的脏 Excel：先搞清工具自动改了什么，再洗干净 | `messy.xlsx`（故意的脏数据） | 空表头 / 重复表头 / 空行 / 合并单元格 / 混合类型的自动处理与 `warnings`，`CAST` + `NULLIF` 的处理办法 |
 | [04-pipeline-actions](04-pipeline-actions/README.md) | 不想一条条敲命令：Excel 直接要图要表，事后还能答出「数字怎么来的」 | `sales.xlsx` | `pipeline` 一条龙出折线图（含 `--group-by` 多系列）、复用已持久化数据集、`annotate` 注释、`--from` 血缘与 `trace`、失败诊断 |
+| [05-multi-series](05-multi-series/README.md) | 同一份数据要「区域 × 月份」和多指标曲线两种对比 | `sales.xlsx` | `--group-by` 长表透视出分组柱、`--y a,b` 宽表直取出多折线、多系列参数校验与 Action 记录 |
 
 看完示例想按职业找场景，见 [docs/scenarios/](../docs/scenarios/README.md)（销售 / 财务 / HR / 电商 / 市场 / 管理 / BI）。
 
