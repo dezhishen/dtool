@@ -48,6 +48,32 @@ dtool visualize --input latest:query --type bar --x 区域 --y 销售额 \
 `latest:query` 指**最近一次查询**，所以要紧跟在上面的 `query` 之后执行；顺序不确定时先
 `dtool actions list` 拿到 action id，再用 `--input action:<id>`。中文标题会自动挑系统中文字体。
 
+## ★★ 多系列：各区域 × 各月份
+
+**对 AI 说**：「按区域和月份汇总销售额，出分组柱状图；再按区域拆成多条折线，缺口不要画成 0。」
+
+```bash
+dtool query --sql "SELECT 区域, substr(日期,1,7) AS 月份, SUM(金额) AS 销售额
+  FROM orders WHERE 状态 <> '已退款' GROUP BY 1,2 ORDER BY 月份, 区域"
+dtool visualize --input latest:query --type bar --x 区域 --y 销售额 \
+  --group-by 月份 --title "各区域月度销售额" --output 区域月度.png
+dtool visualize --input latest:query --type line --x 月份 --y 销售额 \
+  --group-by 区域 --missing gap --title "各区域月度趋势" --output 区域趋势.png
+```
+
+- `--group-by 月份`：长表透视成「区域 × 月份」，每个月份一个系列；换成 `--x 月份 --group-by 区域` 则得到多条区域折线。
+- 缺失组合默认补 0（`--missing zero`）；`--missing gap` 仅 `line` 支持，缺口处断线，避免把「没数据」画成 0。
+- 宽表直取用多 `--y`，与 `--group-by` 互斥：
+
+```bash
+dtool query --sql "SELECT substr(日期,1,7) AS 月份,
+    SUM(CASE WHEN 状态='已完成' THEN 金额 ELSE 0 END) AS 已完成,
+    SUM(CASE WHEN 状态='配送中' THEN 金额 ELSE 0 END) AS 配送中
+  FROM orders GROUP BY 1 ORDER BY 1"
+dtool visualize --input latest:query --type line --x 月份 --y 已完成,配送中 \
+  --title "各状态月度销售额" --output 状态趋势.png
+```
+
 ## ★★ 进阶：把客户档案接进来（JOIN）
 
 **对 AI 说**：「接上客户档案，按消费金额排 Top 10 客户」

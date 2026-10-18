@@ -919,27 +919,19 @@ modernc/SQLite 的页缓存是 mmap/VirtualAlloc 出来的、runtime 元数据�
 
 ### 8.5 图表生成模块
 
-```go
-import charts "github.com/vicanso/go-charts/v2"
+`internal/visualize` 的入口是 `Render(cols, rows, Options)`：`Options` 描述图型、轴字段与输出，
+`Result` 回传数据点、系列名、字体与 warnings。支持 `bar` / `line` / `pie` / `table`，输出 PNG 或 SVG。
 
-func RenderChart(data *QueryResult, chartType, xField, yField, title, output string) error {
-    switch chartType {
-    case "bar":
-        chart, err := charts.BarRender(
-            map[string][]string{xField: extractStrings(data, xField)},
-            charts.WithTitleOpts(charts.TitleOption{Title: title}),
-        )
-        f, _ := os.Create(output)
-        return chart.Render(f)
-    case "line":
-        // 类似
-    case "pie":
-        // 类似
-    }
-    return nil
-}
-```
-
+- **单系列**：一个 `--y`（或 `--group-by` 只有一个唯一值）时只有一条系列，不出图例，输出与历史版本逐字节一致。
+- **多 `--y`（宽表直取）**：`--y a,b` 按逗号拆分，每个列一个系列，列名即系列名。
+- **`--group-by`（长表透视）**：`pivot()` 以 X 为行键、group 值为系列名、Y 为单元格；X 与系列均按
+  输入首次出现顺序（SQL `ORDER BY` 决定），不重排。缺失组合由 `--missing` 决定：`zero`（默认）补 0；
+  `gap` 置空，折线在缺口处断线（柱状图没有断点语义，拒绝 `gap`）。同一个 `(x, group)` 出现多次无法
+  确定格子取值，直接报错并提示先聚合；系列数上限 50。
+- **校验**：x / y / group 字段必须存在，y 必须是数值列；`--group-by` 与多 `--y` 互斥，且不能与 x / y
+  同列；`pie` 只支持单系列；`table` 按原始行导出，忽略 x / y / group-by / missing。
+- **图例布局**：go-charts 默认把图例与标题画在同一行，换行后的图例高度也会被低估；多系列时把图例
+  移到标题下方并补足高度，避免压住标题与 Y 轴顶部刻度。
 
 **中文字体**：go-charts 内置字体不含中文。字体按以下优先级解析（`internal/visualize/font.go`）：
 

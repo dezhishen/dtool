@@ -118,6 +118,23 @@ dtool query --sql "SELECT 编号, 名称,
 {"编号":1003,"名称":"风扇","手机号":null,"金额":null}
 ```
 
+## ★★ 多系列对比（长表 / 宽表）
+
+**对 AI 说**：「同一份结果既要按地区 × 月份看分组柱，也要把两个指标画成两条折线。」
+
+```bash
+# 长表：结果每行是 (地区, 月份, 值)
+dtool visualize --input latest:query --type bar --x 地区 --y 销售额 --group-by 月份
+dtool visualize --input latest:query --type line --x 月份 --y 销售额 --group-by 地区 --missing gap
+
+# 宽表：结果本身就有多列指标
+dtool visualize --input latest:query --type line --x 月份 --y 销售额,成本
+```
+
+- `--group-by` 与多 `--y` 互斥：前者做长表透视，后者做宽表直取。
+- 缺失组合默认补 0；`--missing gap` 仅 `line` 支持，缺口处断线。
+- 系列数上限 50；重复 `(x, group)` 会报错并提示先聚合。
+
 ## ★★★ 多格式投递
 
 **对 AI 说**：「同一份结果分别给我 markdown 和 CSV」
