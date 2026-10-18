@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 示例 1：销售报表 —— 多工作表导入、JOIN 查询、柱状图、Excel/Markdown 导出
+# 示例 1：销售报表 —— 多工作表导入、JOIN 查询、柱状图 / 多系列图、Excel/Markdown 导出
 source "$(dirname "$0")/../lib.sh"
 demo_init 01-sales-report
 
@@ -19,10 +19,21 @@ cat region.md
 # 3. 用刚才的结果出图（latest:query 引用最近一次成功的查询，无需重跑）
 viz --input latest:query --type bar --x 区域 --y 总金额 --title "各区域销售额" --output region.png
 
-# 4. 两个数据集 JOIN：金额 Top 5 客户，并导出 Excel
+# 4. 多系列：区域 × 月份。--group-by 把长表透视成「X 分类 × 系列」，
+#    bar 是分组柱状图，line 是多条折线（两次出图复用同一次查询）
+dt query --sql '
+  SELECT "区域", substr("日期", 1, 7) AS "月份", SUM("金额") AS 销售额
+  FROM orders WHERE "状态" <> '"'已退款'"'
+  GROUP BY "区域", "月份" ORDER BY "月份", "区域"'
+viz --input latest:query --type bar --x 区域 --y 销售额 --group-by 月份 \
+  --title "各区域月度销售额" --output region_month.png
+viz --input latest:query --type line --x 月份 --y 销售额 --group-by 区域 \
+  --title "各区域月度趋势" --output region_trend.png
+
+# 5. 两个数据集 JOIN：金额 Top 5 客户，并导出 Excel
 dt query --format xlsx --output top_customers.xlsx --sql '
   SELECT c."客户名称", c."等级", SUM(o."金额") AS 总金额
   FROM orders o JOIN customers c ON o."客户ID" = c."客户ID"
   GROUP BY c."客户名称", c."等级" ORDER BY 总金额 DESC LIMIT 5'
 
-echo; echo "产物：region.md  region.png  top_customers.xlsx  以及 .dtool/（数据集与 Action 记录）"
+echo; echo "产物：region.md  region.png  region_month.png  region_trend.png  top_customers.xlsx  以及 .dtool/（数据集与 Action 记录）"

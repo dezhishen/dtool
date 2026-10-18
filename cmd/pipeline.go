@@ -39,6 +39,7 @@ func newPipelineCmd() *cobra.Command {
 	f.StringVar(&cfg.Chart, "chart", "", "图表类型 bar / line / pie / table，留空则不出图")
 	f.StringVar(&cfg.X, "x", "", "X 轴字段")
 	f.StringVar(&cfg.Y, "y", "", "Y 轴字段")
+	f.StringVar(&cfg.GroupBy, "group-by", "", "按该字段拆分多系列（bar / line）")
 	f.StringVar(&cfg.Title, "title", "", "图表标题")
 	f.StringVar(&cfg.Format, "format", "png", "png / svg")
 	f.StringVar(&cfg.Font, "font", "", "TTF 字体路径")

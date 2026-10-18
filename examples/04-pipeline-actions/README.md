@@ -20,10 +20,11 @@
 |---|------|------|
 | 1 | `dtool pipeline --excel … --sheet 订单 --name orders --sql … --chart line --output trend.png` | 一条命令完成 转换 → 查询 → 折线图；SQL 里用 `data` 指代刚转换的数据 |
 | 2 | `dtool pipeline --input dataset:orders --sql …` | 数据已持久化，之后只查询不再转换 |
-| 3 | `dtool actions annotate <查询id> --text "口径：…" --by user` | 把口径说明写进 Action，之后任何读取者都能看到 |
-| 4 | `dtool query --from action:<id> …` + `dtool actions trace <id>` | `--from` 只记录血缘；`trace` 展示上游数据 → 本次查询 → 派生结果 |
-| 5 | `dtool query --sql 'SELECT 不存在的列 FROM orders'` | 故意写错：失败也会被记录，`actions list --status failed` 能捞出来 |
-| 6 | `dtool actions list --limit 8` | 最近做了什么、各自产出什么 |
+| 3 | `dtool pipeline --input dataset:orders --sql … --chart line --group-by 区域` | 同一条龙直接出多系列折线（区域 × 月份），无需先单独 query |
+| 4 | `dtool actions annotate <查询id> --text "口径：…" --by user` | 把口径说明写进 Action，之后任何读取者都能看到 |
+| 5 | `dtool query --from action:<id> …` + `dtool actions trace <id>` | `--from` 只记录血缘；`trace` 展示上游数据 → 本次查询 → 派生结果 |
+| 6 | `dtool query --sql 'SELECT 不存在的列 FROM orders'` | 故意写错：失败也会被记录，`actions list --status failed` 能捞出来 |
+| 7 | `dtool actions list --limit 8` | 最近做了什么、各自产出什么 |
 
 ## 运行
 
@@ -37,6 +38,7 @@ bash examples/04-pipeline-actions/run.sh  # 也可 DTOOL=/path/to/dtool bash …
 | 文件 | 内容 |
 |------|------|
 | `trend.png` | 月销售额趋势折线图 |
+| `region_trend.png` | 区域 × 月份的多折线图（pipeline 直接 `--group-by`） |
 | `.dtool/datasets/orders/` | pipeline 持久化下来的数据集 |
 | `.dtool/actions/` | 每个命令一条 Action：类型、状态、摘要、父/派生关系 |
 
@@ -58,6 +60,7 @@ bash examples/04-pipeline-actions/run.sh  # 也可 DTOOL=/path/to/dtool bash …
 ## 关键点
 
 - **pipeline 内部 SQL 的表名固定是 `data`**，不是 `--name` 指定的数据集名。
+- **`--group-by` 在 pipeline 里同样可用**：`--x 月份 --y 销售额 --group-by 区域` 出多条折线，不必先单独 query 再 visualize。
 - **步骤可裁剪**：不带 `--sql` 就只转换（把 Excel 变成可复用的数据集），不带 `--chart` 就只查询。
 - **`--input`** 支持 `文件` / `dataset:<名>` / `action:<id>` / `latest:convert`。
 - **Action 记录 = 审计线索**：`id` / `status` / `summary` / `parent_id` / `derived_from`，

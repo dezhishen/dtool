@@ -346,3 +346,55 @@ func TestXLSXFormatValidation(t *testing.T) {
 		}
 	}
 }
+
+const quarterJSON = `[
+ {"region":"East","quarter":"Q1","total":10},
+ {"region":"West","quarter":"Q1","total":20},
+ {"region":"East","quarter":"Q2","total":30},
+ {"region":"West","quarter":"Q2","total":40}
+]`
+
+// group-by 从 Config 一路透传到 Render，并把 group_by/series 记进 Action。
+func TestPipelineGroupByChart(t *testing.T) {
+	env, dir := newEnv(t)
+	data := filepath.Join(dir, "quarterly.json")
+	os.WriteFile(data, []byte(quarterJSON), 0o644)
+
+	res, err := env.Pipeline(Config{Input: data, SQL: `SELECT region, quarter, total FROM data`,
+		Chart: "line", X: "region", Y: "total", GroupBy: "quarter", Format: "svg",
+		MaxRows: 100, Timeout: 30 * time.Second, Sandbox: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := res.Chart
+	if ch == nil || ch.GroupBy != "quarter" || strings.Join(ch.Series, ",") != "Q1,Q2" || !strings.HasSuffix(ch.File, ".svg") {
+		t.Fatalf("chart = %+v", ch)
+	}
+	a, err := env.Rec.Get(ch.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Input["group_by"] != "quarter" {
+		t.Fatalf("action input should record group_by: %v", a.Input)
+	}
+	if got := a.Output.Details["series"]; got == nil {
+		t.Fatalf("details should record series: %v", a.Output.Details)
+	}
+
+	// 重复的 (region, quarter) 无法落成一个格子：报错并留下 failed Action
+	dup := filepath.Join(dir, "dup.json")
+	os.WriteFile(dup, []byte(`[
+	 {"region":"East","quarter":"Q1","total":10},
+	 {"region":"East","quarter":"Q1","total":30}
+	]`), 0o644)
+	_, err = env.Pipeline(Config{Input: dup, SQL: `SELECT region, quarter, total FROM data`,
+		Chart: "bar", X: "region", Y: "total", GroupBy: "quarter", Format: "svg",
+		MaxRows: 100, Timeout: 30 * time.Second, Sandbox: true})
+	var te *types.Error
+	if !errors.As(err, &te) || !strings.Contains(te.Message, "重复") || !strings.Contains(te.Hint, "GROUP BY") {
+		t.Fatalf("duplicate rows: %v", err)
+	}
+	if failed, _, _ := env.Rec.List(action.Filter{Type: "visualize", Status: action.StatusFailed}); len(failed) == 0 {
+		t.Fatal("failed visualize action should be recorded")
+	}
+}

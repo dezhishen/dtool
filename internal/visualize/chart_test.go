@@ -1,16 +1,23 @@
 package visualize
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/dezhishen/dtool/pkg/types"
 	"github.com/wcharczuk/go-chart/v2/roboto"
 )
+
+// update 用于刷新 SVG golden：go test ./internal/visualize -update
+var update = flag.Bool("update", false, "update golden files")
 
 func rows(t *testing.T, js string) ([]string, []types.Row) {
 	t.Helper()
@@ -176,5 +183,195 @@ func TestASCIIChartNeedsNoFont(t *testing.T) {
 	res, err := Render(cols, r, opt(t, "bar", "svg"))
 	if err != nil || res.Font != "" || len(res.Warnings) != 0 {
 		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+const groupRows = `[
+ {"region":"East","quarter":"Q1","total":10},
+ {"region":"West","quarter":"Q1","total":20},
+ {"region":"East","quarter":"Q2","total":30},
+ {"region":"West","quarter":"Q2","total":40},
+ {"region":"North","quarter":"Q1","total":50}
+]`
+
+func TestPivotOrderAndZeroFill(t *testing.T) {
+	_, r := rows(t, groupRows)
+	xs, names, series, err := pivot(r, "region", "quarter", "total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 分类与系列都按输入首次出现顺序，不按字典序重排
+	if want := []string{"East", "West", "North"}; !slices.Equal(xs, want) {
+		t.Fatalf("categories = %v, want %v", xs, want)
+	}
+	if want := []string{"Q1", "Q2"}; !slices.Equal(names, want) {
+		t.Fatalf("series = %v, want %v", names, want)
+	}
+	// North 没有 Q2 数据 → 补 0
+	want := [][]float64{{10, 20, 50}, {30, 40, 0}}
+	if len(series) != len(want) {
+		t.Fatalf("series count = %d", len(series))
+	}
+	for i := range want {
+		if !slices.Equal(series[i], want[i]) {
+			t.Errorf("series[%d] = %v, want %v", i, series[i], want[i])
+		}
+	}
+}
+
+func TestPivotDuplicateCombinationRejected(t *testing.T) {
+	_, r := rows(t, `[
+	 {"region":"East","quarter":"Q1","total":10},
+	 {"region":"West","quarter":"Q1","total":20},
+	 {"region":"East","quarter":"Q1","total":30}
+	]`)
+	_, _, _, err := pivot(r, "region", "quarter", "total")
+	var te *types.Error
+	if !errors.As(err, &te) || !strings.Contains(te.Message, "重复") {
+		t.Fatalf("err = %v", err)
+	}
+	for _, want := range []string{"region=\"East\"", "quarter=\"Q1\"", "行 1 与行 3"} {
+		if !strings.Contains(te.Message, want) {
+			t.Errorf("message %q should contain %q", te.Message, want)
+		}
+	}
+	if !strings.Contains(te.Hint, "GROUP BY region, quarter") {
+		t.Errorf("hint should suggest aggregation: %q", te.Hint)
+	}
+}
+
+func TestPivotEmptyLabels(t *testing.T) {
+	_, r := rows(t, `[
+	 {"region":null,"quarter":"Q1","total":1},
+	 {"region":"East","quarter":null,"total":2}
+	]`)
+	xs, names, series, err := pivot(r, "region", "quarter", "total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"(空)", "East"}; !slices.Equal(xs, want) {
+		t.Fatalf("categories = %v, want %v", xs, want)
+	}
+	if want := []string{"Q1", "(空)"}; !slices.Equal(names, want) {
+		t.Fatalf("series = %v, want %v", names, want)
+	}
+	if !slices.Equal(series[0], []float64{1, 0}) || !slices.Equal(series[1], []float64{0, 2}) {
+		t.Fatalf("series = %v", series)
+	}
+}
+
+func TestPivotTooManySeries(t *testing.T) {
+	var r []types.Row
+	for i := 0; i <= maxSeries; i++ {
+		r = append(r, types.Row{
+			Columns: []string{"region", "quarter", "total"},
+			Values:  []any{"East", fmt.Sprintf("Q%d", i), 1.0},
+		})
+	}
+	_, _, _, err := pivot(r, "region", "quarter", "total")
+	var te *types.Error
+	if !errors.As(err, &te) || !strings.Contains(te.Message, "too many series") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(te.Hint, "基数") {
+		t.Errorf("hint = %q", te.Hint)
+	}
+}
+
+func TestPivotNonNumeric(t *testing.T) {
+	_, r := rows(t, `[{"region":"East","quarter":"Q1","total":"abc"}]`)
+	_, _, _, err := pivot(r, "region", "quarter", "total")
+	if err == nil || !strings.Contains(err.Error(), "not numeric") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRenderGroupByRejected(t *testing.T) {
+	cols, r := rows(t, groupRows)
+	cases := []struct{ typ, hint string }{
+		{"pie", "bar / line"},
+		{"table", "SQL"},
+	}
+	for _, c := range cases {
+		o := Options{Type: c.typ, X: "region", Y: "total", GroupBy: "quarter", Format: "svg",
+			OutFile: filepath.Join(t.TempDir(), "out.svg")}
+		_, err := Render(cols, r, o)
+		var te *types.Error
+		if !errors.As(err, &te) || !strings.Contains(te.Hint, c.hint) {
+			t.Errorf("%s: err = %v", c.typ, err)
+		}
+	}
+	o := opt(t, "bar", "svg")
+	o.GroupBy = "month"
+	_, err := Render(cols, r, o)
+	var te *types.Error
+	if !errors.As(err, &te) || !strings.Contains(te.Message, `"month"`) || !strings.Contains(te.Detail, "quarter") {
+		t.Fatalf("missing group field: %v", err)
+	}
+}
+
+func TestRenderWithoutGroupByHasNoSeries(t *testing.T) {
+	cols, r := rows(t, regionRows)
+	res, err := Render(cols, r, opt(t, "bar", "svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Series) != 0 {
+		t.Fatalf("single-series result should not report series: %v", res.Series)
+	}
+}
+
+func TestRenderGroupBySVGGolden(t *testing.T) {
+	cols, r := rows(t, groupRows)
+	for _, typ := range []string{"bar", "line"} {
+		o := Options{Type: typ, X: "region", Y: "total", GroupBy: "quarter",
+			Title: "Sales by Quarter", Format: "svg",
+			OutFile: filepath.Join(t.TempDir(), "chart.svg"), FontDirs: []string{t.TempDir()}}
+		res, err := Render(cols, r, o)
+		if err != nil {
+			t.Fatalf("%s: %v", typ, err)
+		}
+		if want := []string{"Q1", "Q2"}; !slices.Equal(res.Series, want) {
+			t.Fatalf("%s: series = %v", typ, res.Series)
+		}
+		b, err := os.ReadFile(o.OutFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range res.Series {
+			if !strings.Contains(string(b), name) {
+				t.Errorf("%s: legend %q missing from svg", typ, name)
+			}
+		}
+		// 同样输入必须逐字节一致，否则 golden 断言没有意义
+		again := o
+		again.OutFile = filepath.Join(t.TempDir(), "again.svg")
+		if _, err := Render(cols, r, again); err != nil {
+			t.Fatal(err)
+		}
+		b2, err := os.ReadFile(again.OutFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(b, b2) {
+			t.Fatalf("%s: svg output is not deterministic", typ)
+		}
+		golden := filepath.Join("testdata", "grouped_"+typ+".svg")
+		if *update {
+			if err := os.MkdirAll("testdata", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(golden, b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		want, err := os.ReadFile(golden)
+		if err != nil {
+			t.Fatalf("%s: %v (run: go test ./internal/visualize -update)", typ, err)
+		}
+		if !bytes.Equal(b, want) {
+			t.Errorf("%s: svg differs from %s (run with -update to refresh)", typ, golden)
+		}
 	}
 }

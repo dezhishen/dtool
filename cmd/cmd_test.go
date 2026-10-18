@@ -612,3 +612,48 @@ func TestLoadModeFlagAndConfig(t *testing.T) {
 		t.Fatalf("flag should win: %v", err)
 	}
 }
+func TestVisualizeGroupBy(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	data := filepath.Join(dir, "quarterly.json")
+	os.WriteFile(data, []byte(`[
+	 {"region":"East","quarter":"Q1","total":10},
+	 {"region":"West","quarter":"Q1","total":20},
+	 {"region":"East","quarter":"Q2","total":30},
+	 {"region":"West","quarter":"Q2","total":40}
+	]`), 0o644)
+
+	got, err := run(t, "visualize", "--input", data, "--type", "bar",
+		"--x", "region", "--y", "total", "--group-by", "quarter", "--format", "svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["group_by"] != "quarter" {
+		t.Fatalf("group_by = %v", got["group_by"])
+	}
+	series, _ := got["series"].([]any)
+	if len(series) != 2 || series[0] != "Q1" || series[1] != "Q2" {
+		t.Fatalf("series = %v", got["series"])
+	}
+	b, err := os.ReadFile(got["file"].(string))
+	if err != nil || !strings.Contains(string(b), "Q1") {
+		t.Fatalf("chart file: %v", err)
+	}
+
+	// 饼图是单系列，带 group-by 必须明确拒绝
+	if errOut, err := runStreams(t, "visualize", "--input", data, "--type", "pie",
+		"--x", "region", "--y", "total", "--group-by", "quarter"); err == nil || !strings.Contains(errOut, "不适用于饼图") {
+		t.Fatalf("pie accepted --group-by: %v %q", err, errOut)
+	}
+
+	// pipeline 同一条龙也支持
+	pipe, err := run(t, "pipeline", "--input", data, "--sql", "SELECT region, quarter, total FROM data",
+		"--chart", "bar", "--x", "region", "--y", "total", "--group-by", "quarter", "--format", "svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart, _ := pipe["chart"].(map[string]any)
+	if chart["group_by"] != "quarter" || len(chart["series"].([]any)) != 2 {
+		t.Fatalf("pipeline chart = %v", pipe["chart"])
+	}
+}

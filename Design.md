@@ -437,6 +437,9 @@ dtool visualize \
   --y total \
   --title "Regional Sales" \
   --output chart.png
+
+# 多系列：各区域 × 各季度（bar = 分组柱，line = 多条折线）
+dtool visualize --input action:01HX...B --type bar --x region --y total --group-by quarter
 ```
 
 | 参数 | 必填 | 说明 |
@@ -445,6 +448,7 @@ dtool visualize \
 | `--type` | 是 | 图表类型：`bar` / `line` / `pie` / `table` |
 | `--x` | 是* | X 轴字段（表格类型可省略） |
 | `--y` | 是* | Y 轴字段（需为数值列，校验失败时报错并列出可用的数值列） |
+| `--group-by` | 否 | 按该字段拆分多系列（仅 `bar` / `line`）；分类与系列按输入顺序（`ORDER BY`）排列，缺失组合补 0，同一 `(x, group)` 重复出现会报错并提示先聚合；系列数上限 50 |
 | `--title` | 否 | 图表标题 |
 | `--output` | 否 | 输出文件，默认写入 `.dtool/outputs/charts/<action-id>/` |
 | `--format` | 否 | 图表：`png` / `svg`；`--type table` 时可选 `md`（默认）/ `xlsx` |

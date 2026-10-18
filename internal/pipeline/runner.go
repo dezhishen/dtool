@@ -14,6 +14,7 @@ type Config struct {
 	Name              string // 数据集名（仅 --excel 时有效）
 	Input             string // 复用已持久化的数据（文件 / action:<id> / latest:<type>），与 Excel 二选一
 	Chart, X, Y       string
+	GroupBy           string
 	Title, Format     string
 	Font              string
 	Output            string
@@ -93,7 +94,8 @@ func (e *Env) Pipeline(c Config) (*types.PipelineResult, error) {
 
 		if c.Chart != "" {
 			ch, err := e.Visualize(VisualizeParams{Input: e.WS.Abs(q.ResultFile), From: fromRef(q.ActionID),
-				Type: c.Chart, X: c.X, Y: c.Y, Title: c.Title, Format: c.Format, Output: c.Output, Font: c.Font}, pid)
+				Type: c.Chart, X: c.X, Y: c.Y, GroupBy: c.GroupBy, Title: c.Title, Format: c.Format,
+				Output: c.Output, Font: c.Font}, pid)
 			if err != nil {
 				return fail("visualize", err)
 			}

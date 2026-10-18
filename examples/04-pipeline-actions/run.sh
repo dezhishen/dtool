@@ -12,6 +12,12 @@ dt pipeline --excel "$DATA/sales.xlsx" --sheet 订单 --name orders \
 # 数据已持久化为数据集，之后可以只做查询（不再转换）
 dt pipeline --input dataset:orders --sql 'SELECT "产品", SUM("数量") AS 销量 FROM data GROUP BY 1 ORDER BY 2 DESC'
 
+# 同一条 pipeline 里直接画多系列：--group-by 区域 → 多条折线（无需先单独 query）
+dt pipeline --input dataset:orders \
+  --sql 'SELECT substr("日期", 1, 7) AS 月份, "区域", ROUND(SUM("金额")) AS 月销售额 FROM data GROUP BY 1, 2 ORDER BY 1, 2' \
+  --chart line --x 月份 --y 月销售额 --group-by 区域 --title "各区域月度趋势" --output region_trend.png \
+  ${FONT_ARGS[@]+"${FONT_ARGS[@]}"}
+
 # 给最近一次查询加注释（口径说明会留在 Action 里，之后任何读取者都能看到）
 QID="$("$DTOOL" actions list --type query --limit 1 | grep -m1 '"id"' | cut -d'"' -f4)"
 dt actions annotate "$QID" --text "口径：不含退款订单需另行核对" --by user

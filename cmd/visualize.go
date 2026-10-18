@@ -37,6 +37,7 @@ func newVisualizeCmd() *cobra.Command {
 	f.StringVar(&p.Type, "type", "", "bar / line / pie / table")
 	f.StringVar(&p.X, "x", "", "X 轴字段")
 	f.StringVar(&p.Y, "y", "", "Y 轴字段（数值）")
+	f.StringVar(&p.GroupBy, "group-by", "", "按该字段拆分多系列（bar / line）：如 region × quarter")
 	f.StringVar(&p.Title, "title", "", "标题")
 	f.StringVar(&p.Output, "output", "", "输出文件，默认写入工作区产物目录")
 	f.StringVar(&p.Format, "format", "png", "png / svg；--type table 时可用 md / xlsx")

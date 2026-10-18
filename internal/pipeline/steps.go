@@ -270,7 +270,7 @@ func writeFormatted(path, format string, r *types.QueryResult) error {
 }
 
 type VisualizeParams struct {
-	Input, Type, X, Y, Title, Format, Output, Font, From string
+	Input, Type, X, Y, GroupBy, Title, Format, Output, Font, From string
 }
 
 func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeResult, error) {
@@ -287,7 +287,11 @@ func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeRes
 	if p.Format == "" {
 		p.Format = "png"
 	}
-	input := map[string]any{"input": p.Input, "type": p.Type, "x": p.X, "y": p.Y, "title": p.Title, "format": p.Format}
+	input := map[string]any{"input": p.Input, "type": p.Type, "x": p.X, "y": p.Y,
+		"title": p.Title, "format": p.Format}
+	if p.GroupBy != "" {
+		input["group_by"] = p.GroupBy
+	}
 	var res *types.VisualizeResult
 	a, err := e.run("visualize", input, parentID, derived, func(_, dir string) (*action.Output, error) {
 		cols, rows, err := visualize.LoadRows(r.Path)
@@ -303,16 +307,21 @@ func (e *Env) Visualize(p VisualizeParams, parentID string) (*types.VisualizeRes
 				}
 			}
 		}
-		vr, err := visualize.Render(cols, rows, visualize.Options{Type: p.Type, X: p.X, Y: p.Y,
+		vr, err := visualize.Render(cols, rows, visualize.Options{Type: p.Type, X: p.X, Y: p.Y, GroupBy: p.GroupBy,
 			Title: p.Title, Format: p.Format, FontPath: p.Font, OutFile: file})
 		if err != nil {
 			return nil, err
 		}
 		res = &types.VisualizeResult{Success: true, File: e.WS.Rel(file), Type: p.Type, X: p.X, Y: p.Y,
-			Points: vr.Points, Warnings: vr.Warnings}
+			GroupBy: p.GroupBy, Series: vr.Series, Points: vr.Points, Warnings: vr.Warnings}
+		details := map[string]any{"type": p.Type, "x": p.X, "y": p.Y, "points": vr.Points, "font": vr.Font}
+		if p.GroupBy != "" {
+			details["group_by"] = p.GroupBy
+			details["series"] = vr.Series
+		}
 		return &action.Output{Files: []string{res.File}, Warnings: vr.Warnings,
 			Summary: fmt.Sprintf("生成 %s 图表：%d 个数据点", p.Type, vr.Points),
-			Details: map[string]any{"type": p.Type, "x": p.X, "y": p.Y, "points": vr.Points, "font": vr.Font}}, nil
+			Details: details}, nil
 	})
 	if err != nil {
 		return nil, err
