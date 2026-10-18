@@ -1,0 +1,3 @@
+# SVG golden 按字节比较：Windows runner 默认 core.autocrlf 会把 checkout 出来的
+# 文本转成 CRLF，导致与生成的 LF 输出不一致。这里固定用 LF，跨平台保持一致。
+internal/visualize/testdata/*.svg text eol=lf

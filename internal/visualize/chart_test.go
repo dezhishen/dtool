@@ -370,8 +370,12 @@ func TestRenderGroupBySVGGolden(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v (run: go test ./internal/visualize -update)", typ, err)
 		}
-		if !bytes.Equal(b, want) {
+		// Windows 的 autocrlf 可能把 golden checkout 成 CRLF；除换行符外仍要求逐字节一致。
+		if !bytes.Equal(normalizeEOL(b), normalizeEOL(want)) {
 			t.Errorf("%s: svg differs from %s (run with -update to refresh)", typ, golden)
 		}
 	}
 }
+
+// normalizeEOL 抹平 CRLF/LF 差异（Windows checkout 与 CI golden 比较用）。
+func normalizeEOL(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")) }
