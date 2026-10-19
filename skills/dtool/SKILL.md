@@ -55,7 +55,7 @@ dtool version                                        # 确认可用（含 versio
 ```bash
 # 1. 导入：Excel → 数据集（Schema 自动生成）
 dtool convert --input sales.xlsx --name sales
-dtool datasets show sales              # 位置 + Schema + 预览：先看 Schema 再写 SQL
+dtool datasets show sales              # 位置 + Schema（类型/枚举，不含样例值；明细读 data_file）
 
 # 2. 查询：数据集名直接当表名
 dtool query --sql 'SELECT region, SUM(amount) AS total FROM sales GROUP BY region ORDER BY total DESC'
@@ -78,19 +78,19 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 |------|------|
 | `convert --input f.xlsx [--sheet S] [--name N]` | 仅 `.xlsx`；`--name` 缺省取文件名（指定 sheet 时追加 `_<sheet>`）；输出含 `data_file`/`schema_file`/`updated_at`/`warnings` |
 | `meminfo [--source alias=文件]...` | 内存排查入口：预算来源（cgroup / Job Object / 系统可用内存 / `--max-memory`）、原始探测字段（`job_object`）、看门狗开关，以及按当前输入的**预检预演**（`verdict: ok/borderline/risky/forced`，以及选中的执行档 `plan.chosen` 与理由——预检与真正执行走同一套选档逻辑）。受限环境里「预检为什么没拦住」先跑它 |
-| `datasets list \| show <name> \| delete <name>` | 查阅/删除数据集；回答"有哪些数据、长什么样"用这个 |
-| `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | `xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
+| `datasets list \| show <name> \| delete <name>` | 查阅/删除数据集；回答"有哪些数据、有哪些列"用这个（show 不输出明细） |
+| `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--rows] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | 默认只输出摘要（`row_count`/`columns`/`result_file`）；`--rows` 才带结果行；`xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y[,Y2...] [--group-by G] [--missing zero\|gap] [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y，且忽略多系列参数；y 必须是数值列；`--group-by`（长表透视）与多 `--y`（宽表直取）互斥，均仅 bar/line，不能与 x/y 同列；缺失组合默认补 0，`--missing gap`（仅 line）改为断线；重复 (x, group) 报错 |
-| `pipeline --excel f \| --input ref [--sql ...] [--chart ...]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据 |
+| `pipeline --excel f \| --input ref [--sql ...] [--chart ...] [--rows]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据；默认只输出各步骤摘要，`--rows` 才附带 `query.rows` |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，会在 ~0.25s 内被看护进程落盘收敛，见下） |
-| `actions show <id> \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
+| `actions show <id> [--full] \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `show` 默认不输出 `output.preview`，`--full` 显式带出；`output` 输出完整产物；`annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
 | `--store auto\|memory\|disk` | SQLite 库落在哪：auto（按预算选档）/ memory（快）/ disk（峰值最低） |
 | `--mem-policy try\|strict` | 所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败 |
 | `-c, --config f.yaml` | 配置文件（YAML：font / workspace / preview_rows 等）；命令行参数优先 |
 | `--sandbox` | 默认开启：SQL 只允许单条 SELECT，且只能读工作区 / 当前目录 / `--source` 文件；`--sandbox=false` 关闭 |
 | `--update [--pre]` / `upgrade [--version V] [--pre] [--skills[=路径]]` | 检查更新 / 升级自身；`--skills` 顺带另存该版本的 SKILL.md（目录 / `.md` 文件 / 裸写法=当前目录）；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
 
-通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
+通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`（Action 落盘的预览行数，默认 20，不影响 stdout）、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
 
 ## SQL 规则（最常踩坑）
 
@@ -137,7 +137,9 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 
 ## 读取结果的方式
 
-- 默认只读 Action 的 `output.preview`（前 20 行）+ `columns` + `summary`；`preview_truncated: true` 才需要读完整产物（`actions output <id>`）。
+- **stdout 默认只给结构与摘要**：`query`/`pipeline` 不打印明细行，`datasets show` 不打印预览，`actions show` 不打印 `output.preview`。数据已经落盘，不要为了“看一眼”把整表拉进上下文。
+- 需要具体值时才显式取：`query --rows` / `pipeline --rows`（少量行），或读 `result_file` / `actions output <id>`（完整产物）；`actions show <id> --full` 带出 Action 里的预览行。
+- 回答"有什么数据、有哪些列"用 `datasets show` 的 `schema` 与 `actions list` 的 `columns`/`summary`，不依赖明细。
 - 产物路径都是相对项目目录的：数据集 `.dtool/datasets/<name>/`，查询 `.dtool/outputs/queries/<id>/result.json`，图表 `.dtool/outputs/charts/<id>/`。
 
 ## 对话场景

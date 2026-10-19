@@ -21,6 +21,7 @@ func newRecorder() (*action.Recorder, *workspace.Workspace, error) {
 
 func newActionsCmd() *cobra.Command {
 	c := &cobra.Command{Use: "actions", Short: "查询、追踪、补充 Action"}
+	var full bool
 
 	sync := &cobra.Command{
 		Use:   "sync",
@@ -77,9 +78,13 @@ func newActionsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !full && a.Output != nil {
+				a.Output.Preview = nil // 预览是明细，默认不打印；--full 显式开启
+			}
 			return printJSON(c.OutOrStdout(), a)
 		},
 	}
+	show.Flags().BoolVar(&full, "full", false, "包含 output.preview（默认只输出摘要与结构）")
 
 	output := &cobra.Command{
 		Use: "output <id>", Short: "输出 Action 主产物的完整内容", Args: cobra.ExactArgs(1),

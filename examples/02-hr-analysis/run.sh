@@ -5,7 +5,7 @@ demo_init 02-hr-analysis
 
 dt convert --input "$DATA/hr.xlsx" --name hr
 # 观察 Schema：工号保持 string（不会丢前导零）；"绩效"可空；"部门"有 enum
-dt datasets show hr --preview-rows 3
+dt datasets show hr
 
 # 各部门人数与平均月薪 → 饼图
 dt query --sql 'SELECT "部门", COUNT(*) AS 人数, ROUND(AVG("月薪")) AS 平均月薪 FROM hr GROUP BY "部门" ORDER BY 人数 DESC'

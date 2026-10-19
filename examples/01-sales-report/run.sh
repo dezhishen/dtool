@@ -7,7 +7,7 @@ demo_init 01-sales-report
 dt convert --input "$DATA/sales.xlsx" --sheet 订单 --name orders
 dt convert --input "$DATA/sales.xlsx" --sheet 客户 --name customers
 dt datasets list
-dt datasets show orders --preview-rows 3          # 先看 Schema：类型/可空/枚举/样例
+dt datasets show orders                           # 先看 Schema：类型/可空/枚举
 
 # 2. 数据集名直接当表名；含中文的列名用双引号
 dt query --format markdown --output region.md --sql '

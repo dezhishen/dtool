@@ -402,6 +402,14 @@ func TestActionsAnnotateTraceExportReindex(t *testing.T) {
 	if len(ann) != 1 || ann[0].(map[string]any)["text"] != "含税" || show["derived_from"] != id {
 		t.Fatalf("show: %v", show)
 	}
+	// 预览是明细：默认不打印，--full 显式要求
+	if _, ok := show["output"].(map[string]any)["preview"]; ok {
+		t.Fatalf("actions show 默认不应输出 preview: %v", show)
+	}
+	full, _ := run(t, "actions", "show", qid, "--full")
+	if p, ok := full["output"].(map[string]any)["preview"].([]any); !ok || len(p) != 1 {
+		t.Fatalf("actions show --full should include preview: %v", full)
+	}
 	meta := func() map[string]any { m, _ := run(t, "actions", "show", id); return m["metadata"].(map[string]any) }()
 	if tags := meta["tags"].([]any); len(tags) != 2 || tags[1] != "b" || meta["notes"] != "n" {
 		t.Fatalf("metadata: %v", meta)
@@ -474,16 +482,31 @@ func TestDatasetsListShowDeleteAndRef(t *testing.T) {
 	if sch["updated_at"] != d["updated_at"] || sch["generated_at"] != nil {
 		t.Fatalf("schema updated_at %v != dataset %v", sch["updated_at"], d["updated_at"])
 	}
-	if len(cols) != 2 || len(show["preview"].([]any)) != 3 {
+	if len(cols) != 2 {
 		t.Fatalf("show: %v", show)
 	}
+	if _, ok := show["preview"]; ok {
+		t.Fatalf("datasets show 默认不应输出明细: %v", show)
+	}
+	for _, c := range cols {
+		if _, ok := c.(map[string]any)["samples"]; ok {
+			t.Fatalf("datasets show 的 schema 不应包含 samples: %v", c)
+		}
+	}
 
-	// 数据集名直接作表名，也可用 dataset: 引用
+	// 默认只输出摘要；--rows 显式要求明细
 	q, err := run(t, "query", "--sql", `SELECT SUM("销量") AS total FROM "销量"`)
+	if err != nil || q["row_count"].(float64) != 1 {
+		t.Fatalf("query summary: %v %v", q, err)
+	}
+	if _, ok := q["rows"]; ok {
+		t.Fatalf("query 默认不应输出 rows: %v", q)
+	}
+	q, err = run(t, "query", "--rows", "--sql", `SELECT SUM("销量") AS total FROM "销量"`)
 	if err != nil || q["rows"].([]any)[0].(map[string]any)["total"].(float64) != 12 {
 		t.Fatalf("query by dataset name: %v %v", q, err)
 	}
-	q, err = run(t, "query", "--source", "s=dataset:销量", "--sql", `SELECT COUNT(*) AS n FROM s`)
+	q, err = run(t, "query", "--rows", "--source", "s=dataset:销量", "--sql", `SELECT COUNT(*) AS n FROM s`)
 	if err != nil || q["rows"].([]any)[0].(map[string]any)["n"].(float64) != 3 {
 		t.Fatalf("query via ref: %v %v", q, err)
 	}
@@ -592,7 +615,7 @@ func TestLoadModeFlagAndConfig(t *testing.T) {
 	}
 	// 三种模式结果一致
 	for _, mode := range []string{"auto", "stream", "full"} {
-		q, err := run(t, "--load-mode", mode, "query", "--source", "d=dataset:d", "--sql", `SELECT COUNT(*) AS n FROM d`)
+		q, err := run(t, "--load-mode", mode, "query", "--rows", "--source", "d=dataset:d", "--sql", `SELECT COUNT(*) AS n FROM d`)
 		if err != nil {
 			t.Fatalf("mode %s: %v", mode, err)
 		}
@@ -667,6 +690,20 @@ func TestVisualizeGroupBy(t *testing.T) {
 	chart, _ := pipe["chart"].(map[string]any)
 	if chart["group_by"] != "quarter" || len(chart["series"].([]any)) != 2 {
 		t.Fatalf("pipeline chart = %v", pipe["chart"])
+	}
+	// 默认只输出摘要，不把明细带到 stdout
+	if qres, ok := pipe["query"].(map[string]any); ok {
+		if _, has := qres["rows"]; has {
+			t.Fatalf("pipeline 默认不应输出 query.rows: %v", pipe["query"])
+		}
+	}
+	pipeRows, err := run(t, "pipeline", "--rows", "--input", data, "--sql", "SELECT region, quarter, total FROM data",
+		"--chart", "bar", "--x", "region", "--y", "total", "--group-by", "quarter", "--format", "svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qres, ok := pipeRows["query"].(map[string]any); !ok || len(qres["rows"].([]any)) != 4 {
+		t.Fatalf("pipeline --rows should include rows: %v", pipeRows["query"])
 	}
 }
 

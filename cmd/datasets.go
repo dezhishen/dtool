@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/dezhishen/dtool/internal/dataset"
-	"github.com/dezhishen/dtool/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +34,7 @@ func newDatasetsCmd() *cobra.Command {
 	}
 
 	show := &cobra.Command{
-		Use: "show <name>", Short: "查看数据集：位置、Schema 与数据预览", Args: cobra.ExactArgs(1),
+		Use: "show <name>", Short: "查看数据集：位置与 Schema（明细直接读 data_file）", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			ds, err := store()
 			if err != nil {
@@ -46,25 +45,16 @@ func newDatasetsCmd() *cobra.Command {
 				return err
 			}
 			doc := map[string]any{"dataset": info}
-			var rows []types.Row
-			data, err := os.ReadFile(ds.Path(args[0]))
-			if err == nil {
-				err = json.Unmarshal(data, &rows)
-			}
-			if err != nil {
-				return types.Errorf(types.CodeExec, "read dataset %s: %v", args[0], err)
-			}
-			n := g.previewRows
-			if n <= 0 {
-				n = 20
-			}
-			doc["preview_truncated"] = len(rows) > n
-			if len(rows) > n {
-				rows = rows[:n]
-			}
-			doc["preview"] = rows
-			var schema any
+			var schema map[string]any
 			if b, err := os.ReadFile(ds.SchemaPath(args[0])); err == nil && json.Unmarshal(b, &schema) == nil {
+				// samples 是具体值，属于明细；stdout 只给结构（类型/可空/枚举等）。
+				if cols, ok := schema["columns"].([]any); ok {
+					for _, c := range cols {
+						if m, ok := c.(map[string]any); ok {
+							delete(m, "samples")
+						}
+					}
+				}
 				doc["schema"] = schema
 			}
 			return printJSON(c.OutOrStdout(), doc)

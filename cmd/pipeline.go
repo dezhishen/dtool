@@ -9,6 +9,7 @@ import (
 
 func newPipelineCmd() *cobra.Command {
 	var cfg pipeline.Config
+	var rowsFlag bool
 	c := &cobra.Command{
 		Use:   "pipeline",
 		Short: "按需执行 convert →（可选）query →（可选）visualize；可只转换并持久化数据，SQL 中用 data 引用",
@@ -26,6 +27,9 @@ func newPipelineCmd() *cobra.Command {
 			res, err := env.Pipeline(cfg)
 			if err != nil {
 				return err
+			}
+			if !rowsFlag && res.Query != nil {
+				res.Query.Rows = nil // 默认只输出摘要；明细已在 result_file
 			}
 			return printJSON(c.OutOrStdout(), res)
 		},
@@ -46,6 +50,7 @@ func newPipelineCmd() *cobra.Command {
 	f.StringVar(&cfg.Font, "font", "", "TTF 字体路径")
 	f.StringVar(&cfg.Output, "output", "", "图表输出文件")
 	f.IntVar(&cfg.MaxRows, "max-rows", 10000, "结果行数上限")
+	f.BoolVar(&rowsFlag, "rows", false, "在 stdout 输出 query 步骤的完整结果行（默认只输出摘要）")
 	f.DurationVar(&cfg.Timeout, "timeout", 60*time.Second, "查询超时")
 	f.BoolVar(&cfg.Sandbox, "sandbox", true, "SQL 沙箱")
 	return c

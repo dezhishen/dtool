@@ -19,7 +19,7 @@
 | # | 命令 | 作用 |
 |---|------|------|
 | 1 | `dtool convert --input ../data/hr.xlsx --name hr` | 单工作表工作簿可直接转换（省略 `--sheet`） |
-| 2 | `dtool datasets show hr --preview-rows 3` | 观察 Schema：`工号` 是 string（前导零不丢）、`绩效` 可空、`部门` 带枚举 |
+| 2 | `dtool datasets show hr` | 观察 Schema：`工号` 是 string（前导零不丢）、`绩效` 可空、`部门` 带枚举 |
 | 3 | `dtool query --sql '…COUNT/AVG…GROUP BY 部门'` + `visualize --type pie` | 各部门人数与平均月薪 → 饼图 |
 | 4 | `dtool query --format csv --output recent_hires.csv --sql '…WHERE 入职日期 >= …'` | 日期是 ISO 文本，可直接比较；导出 CSV |
 | 5 | `dtool query --sql '…WHERE 绩效 IS NULL'` + `visualize --type table --format xlsx` | 用 `IS NULL` 找待评估人员，并整表导出 Excel |

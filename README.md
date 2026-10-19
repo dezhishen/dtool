@@ -6,7 +6,7 @@
 # 只转换：持久化为独立数据集 .dtool/datasets/<name>/，之后可反复使用
 dtool convert --input data.xlsx --name sales
 dtool datasets list                 # 查看已有数据集
-dtool datasets show sales           # 位置 + Schema + 预览
+dtool datasets show sales           # 位置 + Schema（类型/枚举；明细直接读 data_file）
 dtool query --sql 'SELECT region, SUM(amount) FROM sales GROUP BY region'   # 数据集名直接当表名
 
 # 复用已持久化的数据查询（无需重新转换）
@@ -24,6 +24,8 @@ dtool actions list --limit 5
 ```
 
 导出：`query --format csv|markdown|table|json|xlsx --output <文件>`（xlsx 需 `--output`）；`visualize --type bar|line|pie --format png|svg` 出图（`--group-by <字段>` 长表透视，`--y a,b` 宽表多列；bar 为分组柱、line 为多条折线；`--missing zero|gap` 控制缺失组合补 0 / 断线）；`visualize --type table --format md|xlsx` 导出表格。
+
+**stdout 默认只输出摘要与结构**：`query` / `pipeline` 不打印结果行（返回 `row_count`、`columns`、`result_file`），`datasets show` 不打印数据预览，`actions show` 不打印 `output.preview`。明细已经落盘，需要时才显式取：`query --rows` / `pipeline --rows` 把行带回 stdout，`actions show --full` 带出 Action 预览，`actions output <id>` 输出完整产物；`--format csv|markdown|table` 不加 `--output` 时仍是显式要求把数据打到 stdout。
 
 进程被强杀（SIGKILL / 被 OOM 杀）时，dtool 起的看护进程会在约 0.25s 内把这次命令遗留的 Action
 收敛为 `stale`（`error.code=5`，说明「进程已消失、结果未知」），无需再跑命令；`DTOOL_NO_REAPER=1` 可关闭。

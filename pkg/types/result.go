@@ -87,7 +87,7 @@ func (r *Row) UnmarshalJSON(data []byte) error {
 type QueryResult struct {
 	Success    bool     `json:"success"`
 	Columns    []string `json:"columns"`
-	Rows       []Row    `json:"rows"`
+	Rows       []Row    `json:"rows,omitempty"`
 	RowCount   int      `json:"row_count"`
 	ResultFile string   `json:"result_file,omitempty"`
 	OutputFile string   `json:"output_file,omitempty"`

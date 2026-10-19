@@ -27,6 +27,7 @@ func parseSources(list []string) (map[string]string, error) {
 func newQueryCmd() *cobra.Command {
 	var p pipeline.QueryParams
 	var sources []string
+	var rowsFlag bool
 	c := &cobra.Command{
 		Use:   "query",
 		Short: "用 SQL 查询数据集或 JSON 文件（内存 SQLite）",
@@ -48,6 +49,9 @@ func newQueryCmd() *cobra.Command {
 				return err
 			}
 			if p.Format == "" || p.Format == "json" || p.Output != "" {
+				if !rowsFlag {
+					res.Rows = nil // 默认只输出摘要；明细已在 result_file
+				}
 				return printJSON(c.OutOrStdout(), res)
 			}
 			if err := formatter.Write(c.OutOrStdout(), p.Format, res); err != nil {
@@ -64,6 +68,7 @@ func newQueryCmd() *cobra.Command {
 	f.StringArrayVar(&sources, "source", nil, "数据源绑定 alias=ref，ref 为文件 / dataset:<name> / action:<id> / latest:<type>，可重复")
 	f.StringVar(&p.Format, "format", "json", "输出格式: json / csv / markdown / table / xlsx（xlsx 需配合 --output）")
 	f.StringVar(&p.Output, "output", "", "输出文件路径")
+	f.BoolVar(&rowsFlag, "rows", false, "在 stdout 输出完整结果行（默认只输出摘要，数据已写入 result_file）")
 	f.IntVar(&p.MaxRows, "max-rows", 10000, "结果行数上限，0 表示不限")
 	f.DurationVar(&p.Timeout, "timeout", 60*time.Second, "查询超时")
 	f.BoolVar(&p.Sandbox, "sandbox", true, "沙箱：仅允许单条 SELECT，且只读工作区/当前目录/--source 文件")

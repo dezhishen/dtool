@@ -124,7 +124,7 @@
 - **更新语义**：数据集没有版本概念。同名重新 `convert` 会**覆盖**数据与 Schema，并刷新 `updated_at`（先写暂存目录，再在锁内 rename，避免读到半截数据）。**Schema 是数据集的必备部分**，缺失则不会提交。需要保留旧数据请换一个 `--name`。
 - **直接用作表名**：SQL 中 `FROM`/`JOIN` 后的名称若是数据集名则自动绑定（`SELECT ... FROM sales`），无需 `--source`；显式 `--source` 优先。
 - **Action 产物**：`outputs/queries/<action-id>/`、`outputs/charts/<action-id>/`；文档后文出现的 `result.json` 等均指对应目录下的文件。`--output` 指定外部路径时直接写到该处，并在 Action 的 `files` 中记录。
-- **查阅**：`dtool datasets list`（名称、更新时间、记录数、列、文件位置）、`dtool datasets show <name>`（位置 + Schema + 预览）、`dtool datasets delete <name>`，AI 在对话中据此回答"有哪些数据、长什么样"。
+- **查阅**：`dtool datasets list`（名称、更新时间、记录数、列、文件位置）、`dtool datasets show <name>`（位置 + Schema，明细直接读 `data_file`）、`dtool datasets delete <name>`，AI 在对话中据此回答"有哪些数据、有哪些列"。
 - `index.json` 只是缓存，损坏或缺失时由 `dtool actions reindex` 从 `actions/` 重建。
 - 所有写操作持有 `.lock`；Action 文件只会被其所属进程与 `annotate` 修改。
 - 所有路径记录为相对工作区的相对路径，保证工作区可整体搬迁。
@@ -201,17 +201,23 @@
 | `error` | 失败时的错误信息 |
 | `metadata` | 用户/AI 附加的标签与备注 |
 
-### 4.3 数据预览策略
+### 4.3 数据预览与 stdout 契约
 
-为了让 AI 无需读取完整产物即可理解结果，`output.preview` 应包含：
+stdout 面向调用方（尤其是 AI），**默认只输出执行结果的结构与摘要，不输出数据明细**——避免把整表数据写入终端/对话上下文，也避免无谓的数据外泄。
 
-- 默认前 **20 行**数据（可通过 `--preview-rows` 调整）。
-- 若结果行数超过预览行数，`preview_truncated: true`，AI 会知道需要读取完整文件。
+| 命令 | 默认 stdout | 显式取明细 |
+|------|-------------|------------|
+| `query` | `success`、`row_count`、`columns`、`result_file`、`action_id` | `--rows` 附带行；`--format csv\|markdown\|table` 不加 `--output` 时直接打印表格 |
+| `pipeline` | 各步骤摘要（含 `query.row_count`、`query.columns`）与产物路径 | `--rows` 附带 `query.rows` |
+| `datasets show` | 数据集元信息 + Schema（去掉 `samples` 等具体值） | 直接读 `data_file`；`query --source` 再聚合 |
+| `actions show` | Action 主体，但不含 `output.preview` | `--full` 带出预览；`actions output <id>` 输出完整产物 |
+| `actions output` | 完整产物（显式命令） | — |
+
+预览仍然**落盘**，用于让 AI 在不读完整产物时理解结果：`output.preview` 默认存前 **20 行**（`--preview-rows` / 配置文件 `preview_rows` 调整），超出时 `preview_truncated: true`。它只是磁盘上的 Action 字段，不会自动出现在 stdout。
+
 - 若结果为空，`preview: []` 且 `summary` 说明"查询返回 0 行"。
-- 对于 `convert`，预览为前 20 条记录 + 列名列表。
+- 对于 `convert`，预览为前 N 条记录 + 列名列表。
 - 对于 `visualize`，预览为生成的图表元信息（类型、轴字段、数据点数量）。
-
-这样，AI 在大多数对话场景下**只需读取 Action 文件，无需打开产物文件**，即可回答"结果是什么"、"有哪些字段"、"能不能画饼图"等问题。
 
 ### 4.4 Action 生命周期
 
@@ -329,7 +335,7 @@ dtool visualize --input latest:query --type pie --x region --y total
 | `--tags` | 逗号分隔的标签，写入 Action metadata |
 | `--notes` | 备注，写入 Action metadata |
 | `--from` | 指定派生来源，如 `action:<id>` 或 `latest:<type>` |
-| `--preview-rows` | Action 预览行数，默认 20 |
+| `--preview-rows` | Action 里存多少行预览，默认 20（只落盘，不打印到 stdout） |
 | `--no-record` | 跳过 Action 记录（用于临时查询）；此时 stdout 不含 `action_id`，且不可被后续命令引用 |
 | `--sandbox` | 默认开启：SQL 仅允许读取 `--source` 绑定文件与工作区内文件，禁止读取任意系统路径（如 `/etc/passwd`）、URL 与写入类语句 |
 | `--load-mode` | JSON 装入方式：`auto`（默认，按内存预算在 full+内存库 / stream+内存库 / stream+磁盘库 三档间选；整块解析仅在输入 <32MB 且预计峰值 ≤ 预算 80% 时使用）/ `stream` / `full` |
@@ -403,29 +409,29 @@ dtool query \
 | `--from` | 否 | 派生来源，用于关联上游 Action |
 | `--format` | 否 | 输出格式：`json` / `csv` / `markdown` / `table` / `xlsx`（xlsx 为二进制，必须配合 `--output`；数值写为数字单元格，表头加粗，列宽自适应） |
 | `--output` | 否 | 输出文件路径 |
+| `--rows` | 否 | 在 stdout 附带完整结果行；默认只输出摘要（行已写入 `result_file`） |
 
 **内部实现**：
 
 - 重写 SQL：别名 / 文件路径（双引号、反引号，或 `FROM`/`JOIN` 后的裸路径）解析为文件，同一文件只载入一次。
 - 把用到的文件载入内存 SQLite（`sql.Open("sqlite", ":memory:")`，单连接），再执行查询，直接得到带类型的行（`int64` / `float64` / `string`）。
 - 沙箱：仅允许单条 `SELECT`/`WITH`（挡住 `ATTACH`/`PRAGMA`）；解析出的文件必须位于工作区、当前目录，或由 `--source` 显式绑定。
-- 根据 `--format` 格式化输出；结果集过大时，完整结果落盘到产物文件，stdout 与 Action 只带预览，并受 `--max-rows`（默认 10000）约束。
+- 根据 `--format` 格式化输出；完整结果始终落盘到产物文件，stdout 默认只输出结构/摘要（`--rows` 才附带行），并受 `--max-rows`（默认 10000）约束。
 - 支持 `context.Context` 超时（`--timeout`，默认 60s）。
 
-**stdout 输出示例（json 格式）**：
+**stdout 输出示例（默认，json）**：
 
 ```json
 {
   "success": true,
   "columns": ["region", "total"],
-  "rows": [
-    {"region": "North", "total": 15000},
-    {"region": "South", "total": 23000}
-  ],
   "row_count": 2,
+  "result_file": ".dtool/outputs/queries/01HX...B/result.json",
   "action_id": "01HX...B"
 }
 ```
+
+加 `--rows` 才附带 `rows`。
 
 ### 5.3 `visualize`：结果 → 图表 / 表格
 
@@ -468,7 +474,7 @@ dtool pipeline \
   --tags "monthly-report"
 ```
 
-Pipeline 的各步骤**均为可选**：`--excel` 只做转换（数据持久化为独立的数据集 `datasets/<name>/`，可反复使用）；`--input <ref>` 复用已有数据而跳过转换；省略 `--sql` 则不查询，`--chart` 必须配合 `--sql`。SQL 中用 `data` 引用上游数据。执行的步骤生成子 Action，与父 Action 通过 `parent_id` 关联。
+Pipeline 的各步骤**均为可选**：`--excel` 只做转换（数据持久化为独立的数据集 `datasets/<name>/`，可反复使用）；`--input <ref>` 复用已有数据而跳过转换；省略 `--sql` 则不查询，`--chart` 必须配合 `--sql`。SQL 中用 `data` 引用上游数据。执行的步骤生成子 Action，与父 Action 通过 `parent_id` 关联。stdout 默认只输出各步骤摘要与产物路径；`--rows` 才附带 `query.rows`。
 
 - 子步骤失败时，父 Action 置为 `failed`，`error.detail` 指明失败的子 Action ID；已成功的子 Action 保留，AI 可从失败点用 `--from` 续写，无需重跑。
 - 子步骤之间通过 Action 引用传递数据（内部等价于 `latest:` 的精确 ID 绑定），不在内存中隐式共享，保证每个子 Action 可单独复现。
@@ -487,8 +493,11 @@ dtool actions list --limit 10
 # 按类型/状态过滤
 dtool actions list --type query --status success
 
-# 查看某个 Action 的完整详情（含预览、注释、派生链）
+# 查看某个 Action 的完整详情（含注释、派生链；不含预览）
 dtool actions show 01HX7Z8K2M9PQR3STUVWXYZABC
+
+# 显式带出 output.preview
+dtool actions show 01HX7Z8K2M9PQR3STUVWXYZABC --full
 
 # 查看某个 Action 的输出数据（完整数据，非预览）
 dtool actions output 01HX7Z8K2M9PQR3STUVWXYZABC
@@ -709,6 +718,7 @@ AI:  执行 dtool datasets show sales，读取其中的 schema
            FROM 'data.json'
            WHERE region IN ('North', 'South')
            GROUP BY region
+     （需要看具体值时显式加 --rows 或读 result_file）
 ```
 
 ### 7.5 用户对话式补充（核心场景）
@@ -718,7 +728,8 @@ AI:  执行 dtool datasets show sales，读取其中的 schema
 ```
 用户: "上次那个按地区的汇总，再按季度拆一下"
 AI:  1. 执行 dtool actions list --type query --limit 1
-        获取 Action 01HX...B，读取其 output.columns 和 preview
+        获取 Action 01HX...B，读取其 output.columns 和 summary
+        （需要具体值时才 actions show --full / actions output）
      2. 执行 dtool query \
           --from action:01HX...B \
           --sql "SELECT region, quarter, SUM(total) AS total

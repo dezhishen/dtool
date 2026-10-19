@@ -52,7 +52,7 @@ func TestExampleDataSources(t *testing.T) {
 		t.Fatalf("join: %v %v", q, err)
 	}
 	// 示例 2：前导零保持文本、绩效可空、日期可比较
-	q, err = run(t, "query", "--sql", `SELECT MIN("工号") AS first_id, COUNT(*) - COUNT("绩效") AS no_rating, SUM("入职日期" >= '2026-01-01') AS new_hires FROM hr`)
+	q, err = run(t, "query", "--rows", "--sql", `SELECT MIN("工号") AS first_id, COUNT(*) - COUNT("绩效") AS no_rating, SUM("入职日期" >= '2026-01-01') AS new_hires FROM hr`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestExampleDataSources(t *testing.T) {
 		t.Fatalf("hr invariants: %v", row)
 	}
 	// 示例 3：前导零手机号、混合类型列按文本、NULLIF 转 NULL
-	q, err = run(t, "query", "--sql", `SELECT "手机号", CAST(NULLIF("金额", 'N/A') AS REAL) AS a FROM messy ORDER BY "编号"`)
+	q, err = run(t, "query", "--rows", "--sql", `SELECT "手机号", CAST(NULLIF("金额", 'N/A') AS REAL) AS a FROM messy ORDER BY "编号"`)
 	if err != nil {
 		t.Fatal(err)
 	}
