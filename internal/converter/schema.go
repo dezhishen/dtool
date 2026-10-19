@@ -7,24 +7,21 @@ import (
 	"time"
 )
 
+// ColumnSchema 只描述结构，不包含任何原始取值（枚举/样例/极值都不在这里）。
+// 需要具体值时走 `dtool datasets values` 这一显式数据动作。
 type ColumnSchema struct {
-	Name     string   `json:"name"`
-	Type     string   `json:"type"`
-	SQLType  string   `json:"sql_type"`
-	Nullable bool     `json:"nullable"`
-	Unique   bool     `json:"unique,omitempty"`
-	Enum     []string `json:"enum,omitempty"`
-	Min      *float64 `json:"min,omitempty"`
-	Max      *float64 `json:"max,omitempty"`
-	Format   string   `json:"format,omitempty"`
-	Samples  []any    `json:"samples,omitempty"`
+	Name              string `json:"name"`
+	Type              string `json:"type"`
+	SQLType           string `json:"sql_type"`
+	Nullable          bool   `json:"nullable"`
+	Unique            bool   `json:"unique,omitempty"`
+	DistinctCount     int    `json:"distinct_count,omitempty"`
+	DistinctTruncated bool   `json:"distinct_count_truncated,omitempty"`
+	Role              string `json:"role,omitempty"`
+	Format            string `json:"format,omitempty"`
 }
 
-const (
-	enumLimit   = 20
-	uniqueLimit = 100000
-	sampleCount = 3
-)
+const uniqueLimit = 100000
 
 var (
 	intRe    = regexp.MustCompile(`^-?\d+$`)
@@ -62,17 +59,12 @@ func isBlank(s string) bool { return strings.TrimSpace(s) == "" }
 type colStat struct {
 	nonNull int
 	seen    map[string]struct{}
-	order   []string // 前 enumLimit+1 个不同值，按首次出现顺序
-	over    bool     // 不同值超过 uniqueLimit，此时不再跟踪 seen/order
+	over    bool // 不同值超过 uniqueLimit，此时不再跟踪 seen
 
 	intOK  bool // 迄今所有非空值都满足整数规则（含 ≤15 位、无前导零）
 	numOK  bool // ... 都满足数字规则
 	boolOK bool // ... 都是 true/false
 	dateOK []bool
-
-	hasNum bool
-	min    *float64
-	max    *float64
 }
 
 func newColStat() *colStat {
@@ -95,12 +87,9 @@ func (c *colStat) observe(raw string) {
 	if !c.over {
 		if _, ok := c.seen[v]; !ok {
 			if len(c.seen) >= uniqueLimit {
-				c.over = true // 与原实现一致：溢出后不再收集，也不再判定 unique/enum
+				c.over = true // 溢出后不再收集；unique/distinct_count 标记为不可知
 			} else {
 				c.seen[v] = struct{}{}
-				if len(c.order) < enumLimit+1 {
-					c.order = append(c.order, v)
-				}
 			}
 		}
 	}
@@ -122,20 +111,6 @@ func (c *colStat) observe(raw string) {
 				c.dateOK[i] = false
 			}
 		}
-	}
-	// 最小/最大值：整数规则蕴含数字规则，因此只在 numOK 时解析即可
-	// （原实现在最终类型为 integer/number 时也会解析全部非空值）。
-	if c.numOK {
-		f, _ := strconv.ParseFloat(v, 64)
-		if c.min == nil || f < *c.min {
-			m := f
-			c.min = &m
-		}
-		if c.max == nil || f > *c.max {
-			m := f
-			c.max = &m
-		}
-		c.hasNum = true
 	}
 }
 
@@ -159,29 +134,43 @@ func (c *colStat) typ() (typ, format string) {
 	return "string", ""
 }
 
-// column 依据累积结果产出列 Schema。
+// column 依据累积结果产出列 Schema（只含结构，不含原始取值）。
 func (c *colStat) column(name string, records int) ColumnSchema {
 	typ, format := c.typ()
 	cs := ColumnSchema{Name: name, Type: typ, SQLType: sqlType(typ), Format: format,
 		Nullable: c.nonNull < records}
+	cs.DistinctCount = len(c.seen)
+	cs.DistinctTruncated = c.over
 	if !c.over {
 		cs.Unique = c.nonNull == records && len(c.seen) == records && records > 0
-		if typ == "string" && len(c.seen) <= enumLimit && len(c.seen) < c.nonNull {
-			cs.Enum = c.order
-		}
 	}
-	for _, v := range c.order {
-		if len(cs.Samples) >= sampleCount {
-			break
-		}
-		cs.Samples = append(cs.Samples, convertCell(typ, v))
-	}
-	if typ == "integer" || typ == "number" {
-		cs.Min, cs.Max = c.min, c.max
-	}
+	cs.Role = roleOf(typ, cs.Unique, cs.DistinctCount, c.nonNull)
 	return cs
 }
 
+// roleOf 给出列的语义角色，帮助 AI 决定能否 GROUP BY/筛选，但不泄露任何值。
+func roleOf(typ string, unique bool, distinct, nonNull int) string {
+	if unique {
+		return "identifier"
+	}
+	switch typ {
+	case "date":
+		return "time"
+	case "integer", "number":
+		return "measure"
+	case "boolean":
+		return "flag"
+	case "string":
+		// 每个值平均至少重复 3 次，且基数不大，才视为分类字段。
+		if distinct > 0 && distinct <= 50 && nonNull >= distinct*3 {
+			return "category"
+		}
+		return "text"
+	}
+	return "text"
+}
+
+// convertCell 把原始单元格按推断出的类型转成 JSON 值；用于写 data.json，不用于 Schema 展示。
 func convertCell(typ, s string) any {
 	if isBlank(s) {
 		return nil

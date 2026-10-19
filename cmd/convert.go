@@ -26,6 +26,12 @@ func newConvertCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strongPrivacy() {
+				var items []artifactItem
+				addArtifact(&items, "data", res.DataFile)
+				addArtifact(&items, "schema", res.SchemaFile)
+				return printDelivery(c, res.ActionID, items...)
+			}
 			return printJSON(c.OutOrStdout(), res)
 		},
 	}

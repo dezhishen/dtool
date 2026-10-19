@@ -78,7 +78,11 @@ func newActionsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !full && a.Output != nil {
+			if full {
+				if err := forbidStrong("输出 output.preview（--full）"); err != nil {
+					return err
+				}
+			} else if a.Output != nil {
 				a.Output.Preview = nil // 预览是明细，默认不打印；--full 显式开启
 			}
 			return printJSON(c.OutOrStdout(), a)
@@ -89,6 +93,9 @@ func newActionsCmd() *cobra.Command {
 	output := &cobra.Command{
 		Use: "output <id>", Short: "输出 Action 主产物的完整内容", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
+			if err := forbidStrong("通过 actions output 输出完整产物"); err != nil {
+				return err
+			}
 			rec, ws, err := newRecorder()
 			if err != nil {
 				return err
@@ -160,6 +167,14 @@ func newActionsCmd() *cobra.Command {
 			all, err := rec.All()
 			if err != nil {
 				return err
+			}
+			if strongPrivacy() {
+				// 导出仍可做，但不能把预览明细带进导出文件。
+				for _, a := range all {
+					if a.Output != nil {
+						a.Output.Preview = nil
+					}
+				}
 			}
 			if exportLimit > 0 && len(all) > exportLimit {
 				all = all[len(all)-exportLimit:]

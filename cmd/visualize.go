@@ -32,6 +32,9 @@ func newVisualizeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if strongPrivacy() {
+				return printDelivery(c, res.ActionID, artifactItem{"chart", res.File})
+			}
 			return printJSON(c.OutOrStdout(), res)
 		},
 	}

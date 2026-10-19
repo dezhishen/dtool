@@ -37,7 +37,7 @@ bash examples/03-messy-data/run.sh  # 也可 DTOOL=/path/to/dtool bash …
 | 文件 | 内容 |
 |------|------|
 | `.dtool/datasets/messy/` | 清洗后的数据集与 Schema |
-| `.dtool/` 下 Action 记录 | `convert` 的 `warnings`、查询 SQL 与结果预览 |
+| `.dtool/` 下 Action 记录 | `convert` 的 `warnings`、查询 SQL；结果预览仅本机落盘，强隐私下不输出 |
 
 控制台会直接打印 warnings（这就是「改了什么」的清单）：
 

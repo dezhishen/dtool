@@ -6,8 +6,12 @@
 # 只转换：持久化为独立数据集 .dtool/datasets/<name>/，之后可反复使用
 dtool convert --input data.xlsx --name sales
 dtool datasets list                 # 查看已有数据集
-dtool datasets show sales           # 位置 + Schema（类型/枚举；明细直接读 data_file）
-dtool query --sql 'SELECT region, SUM(amount) FROM sales GROUP BY region'   # 数据集名直接当表名
+dtool datasets show sales           # 位置 + Schema（类型/可空/唯一/基数/角色）
+dtool query --sql 'SELECT region, SUM(amount) FROM sales GROUP BY region'   # 默认只返回交付清单
+
+# 需要自己看结果/枚举值时，只能由用户本人把 config.yaml 改成 privacy: normal
+dtool -c config.yaml query --rows --sql 'SELECT region, SUM(amount) FROM sales GROUP BY region'
+dtool -c config.yaml datasets values sales --column region
 
 # 复用已持久化的数据查询（无需重新转换）
 dtool query --source sales=dataset:sales --sql 'SELECT region, SUM(amount) AS total FROM sales GROUP BY region'
@@ -25,7 +29,16 @@ dtool actions list --limit 5
 
 导出：`query --format csv|markdown|table|json|xlsx --output <文件>`（xlsx 需 `--output`）；`visualize --type bar|line|pie --format png|svg` 出图（`--group-by <字段>` 长表透视，`--y a,b` 宽表多列；bar 为分组柱、line 为多条折线；`--missing zero|gap` 控制缺失组合补 0 / 断线）；`visualize --type table --format md|xlsx` 导出表格。
 
-**stdout 默认只输出摘要与结构**：`query` / `pipeline` 不打印结果行（返回 `row_count`、`columns`、`result_file`），`datasets show` 不打印数据预览，`actions show` 不打印 `output.preview`。明细已经落盘，需要时才显式取：`query --rows` / `pipeline --rows` 把行带回 stdout，`actions show --full` 带出 Action 预览，`actions output <id>` 输出完整产物；`--format csv|markdown|table` 不加 `--output` 时仍是显式要求把数据打到 stdout。
+**默认 `privacy: strong`（强隐私），且只能由用户本人修改配置文件切换，命令行没有开关可覆盖。** 结果类命令的 stdout 只有一个交付清单：`action_id` + `artifacts[]`（`path` / `abs_path` / `mime` / `bytes` / `sha256`）+ `send`（怎么发），不包含 `columns`、`rows`、`row_count`、`preview`。用 `dtool deliver <action_id>` 可随时重新取回同一份清单；把 `abs_path` 作为附件发给用户即可，不需要读取内容。
+
+强隐私下这些“读具体值”的路径会直接拒绝（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`actions show --full`、`actions output`。
+
+`datasets show` 仍可查看结构，但只有 `type` / `sql_type` / `nullable` / `unique` / `distinct_count` / `role`，**不含 `enum`、`samples`、`min`/`max`**。需要枚举值时，在 `privacy: normal` 下执行一次显式数据动作：`dtool datasets values <name> --column <col> [--limit 20]`（会记录为一条 `query` Action）。
+
+```yaml
+# config.yaml —— 仅用户本人显式写入；自动化代理不应修改这一项
+privacy: normal   # 默认 strong；normal 才允许 --rows / datasets values 等数据动作
+```
 
 进程被强杀（SIGKILL / 被 OOM 杀）时，dtool 起的看护进程会在约 0.25s 内把这次命令遗留的 Action
 收敛为 `stale`（`error.code=5`，说明「进程已消失、结果未知」），无需再跑命令；`DTOOL_NO_REAPER=1` 可关闭。
@@ -350,7 +363,10 @@ dtool upgrade --skills=~/.claude/skills/dtool/SKILL.md   # 从发布归档里取
 font: /usr/share/fonts/truetype/arphic/uming.ttc
 workspace: .dtool
 preview_rows: 20
+privacy: strong        # 默认；只有用户本人显式改成 normal 才允许数据动作
 ```
+
+> `privacy` 刻意不做命令行开关，也不读环境变量：自动化代理无法用参数绕过强隐私。`-c` 指向的配置文件应视为用户输入，不要把写权限交给代理。
 
 ```bash
 dtool -c config.yaml visualize --input latest:query --type bar --x 区域 --y 销量 --title 区域销量

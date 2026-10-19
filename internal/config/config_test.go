@@ -53,6 +53,27 @@ func TestLoadModeField(t *testing.T) {
 	}
 }
 
+func TestParsePrivacy(t *testing.T) {
+	for _, s := range []string{"", "strong", "STRONG", " normal "} {
+		p, err := ParsePrivacy(s)
+		if err != nil {
+			t.Fatalf("%q: %v", s, err)
+		}
+		want := PrivacyStrong
+		if strings.TrimSpace(strings.ToLower(s)) == "normal" {
+			want = PrivacyNormal
+		}
+		if p != want {
+			t.Fatalf("%q = %q, want %q", s, p, want)
+		}
+	}
+	if p, err := ParsePrivacy("weak"); err == nil || p != "" {
+		t.Fatalf("weak should fail: %q %v", p, err)
+	} else if te := types.AsError(err, 0); te.Code != types.CodeUsage {
+		t.Fatalf("code = %d", te.Code)
+	}
+}
+
 func TestLoadEmptyAndErrors(t *testing.T) {
 	if c, err := Load(write(t, "")); err != nil || c.Font != "" {
 		t.Fatalf("empty file: %+v %v", c, err)

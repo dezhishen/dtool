@@ -107,7 +107,7 @@
 ├── datasets/                 # 数据集：独立于 Action 的一等实体，随时可被任意 Action 引用
 │   ├── 销量表/
 │   │   ├── data.json
-│   │   ├── data.schema.json  # 必有：列类型/可空/枚举/样例 + updated_at 更新日期
+│   │   ├── data.schema.json  # 必有：列类型/可空/唯一/去重基数/角色 + updated_at 更新日期
 │   │   └── dataset.json      # 元数据：名称、来源、创建/更新时间、记录数、列、产出它的 action_id
 │   └── hr/...
 ├── outputs/                  # Action 产物，每次执行一个 <action-id> 目录，互不覆盖
@@ -124,7 +124,7 @@
 - **更新语义**：数据集没有版本概念。同名重新 `convert` 会**覆盖**数据与 Schema，并刷新 `updated_at`（先写暂存目录，再在锁内 rename，避免读到半截数据）。**Schema 是数据集的必备部分**，缺失则不会提交。需要保留旧数据请换一个 `--name`。
 - **直接用作表名**：SQL 中 `FROM`/`JOIN` 后的名称若是数据集名则自动绑定（`SELECT ... FROM sales`），无需 `--source`；显式 `--source` 优先。
 - **Action 产物**：`outputs/queries/<action-id>/`、`outputs/charts/<action-id>/`；文档后文出现的 `result.json` 等均指对应目录下的文件。`--output` 指定外部路径时直接写到该处，并在 Action 的 `files` 中记录。
-- **查阅**：`dtool datasets list`（名称、更新时间、记录数、列、文件位置）、`dtool datasets show <name>`（位置 + Schema，明细直接读 `data_file`）、`dtool datasets delete <name>`，AI 在对话中据此回答"有哪些数据、有哪些列"。
+- **查阅**：`dtool datasets list`（名称、更新时间、记录数、列、文件位置）、`dtool datasets show <name>`（位置 + 结构：类型/可空/唯一/基数/角色，不含任何原值）、`dtool datasets values <name> --column C`（显式数据动作，仅 `normal`）、`dtool datasets delete <name>`，AI 在对话中据此回答"有哪些数据、有哪些列"。
 - `index.json` 只是缓存，损坏或缺失时由 `dtool actions reindex` 从 `actions/` 重建。
 - 所有写操作持有 `.lock`；Action 文件只会被其所属进程与 `annotate` 修改。
 - 所有路径记录为相对工作区的相对路径，保证工作区可整体搬迁。
@@ -201,23 +201,44 @@
 | `error` | 失败时的错误信息 |
 | `metadata` | 用户/AI 附加的标签与备注 |
 
-### 4.3 数据预览与 stdout 契约
+### 4.3 数据、结构与交付契约
 
-stdout 面向调用方（尤其是 AI），**默认只输出执行结果的结构与摘要，不输出数据明细**——避免把整表数据写入终端/对话上下文，也避免无谓的数据外泄。
+默认 `privacy: strong`（强隐私）。结果类命令的 stdout 只有一个**交付清单**，不包含任何数据或结果统计：
 
-| 命令 | 默认 stdout | 显式取明细 |
-|------|-------------|------------|
-| `query` | `success`、`row_count`、`columns`、`result_file`、`action_id` | `--rows` 附带行；`--format csv\|markdown\|table` 不加 `--output` 时直接打印表格 |
-| `pipeline` | 各步骤摘要（含 `query.row_count`、`query.columns`）与产物路径 | `--rows` 附带 `query.rows` |
-| `datasets show` | 数据集元信息 + Schema（去掉 `samples` 等具体值） | 直接读 `data_file`；`query --source` 再聚合 |
-| `actions show` | Action 主体，但不含 `output.preview` | `--full` 带出预览；`actions output <id>` 输出完整产物 |
-| `actions output` | 完整产物（显式命令） | — |
+```json
+{
+  "success": true,
+  "action_id": "01HX...",
+  "artifacts": [{
+    "role": "result",
+    "path": ".dtool/outputs/queries/01HX.../result.json",
+    "abs_path": "/abs/path/.dtool/outputs/queries/01HX.../result.json",
+    "mime": "application/json",
+    "bytes": 12345,
+    "sha256": "…"
+  }],
+  "send": {"mode": "attachment", "hint": "把 artifacts[].abs_path 作为文件附件发给用户；不要读取或复述其内容"}
+}
+```
 
-预览仍然**落盘**，用于让 AI 在不读完整产物时理解结果：`output.preview` 默认存前 **20 行**（`--preview-rows` / 配置文件 `preview_rows` 调整），超出时 `preview_truncated: true`。它只是磁盘上的 Action 字段，不会自动出现在 stdout。
+AI 只负责把文件发给用户，不需要也不应该读内容。`dtool deliver <action_id>` 可随时重新取回同一份清单。
 
-- 若结果为空，`preview: []` 且 `summary` 说明"查询返回 0 行"。
-- 对于 `convert`，预览为前 N 条记录 + 列名列表。
-- 对于 `visualize`，预览为生成的图表元信息（类型、轴字段、数据点数量）。
+**隐私模式只能由用户本人修改配置文件切换**（`privacy: strong|normal`），命令行没有开关，也不读环境变量；默认（无配置或未写该项）一律 `strong`。
+
+| 命令 | `strong`（默认） | `normal` |
+|------|------------------|----------|
+| `convert` / `query` / `pipeline` / `visualize` | 仅交付清单 | 摘要 + 产物路径 |
+| `query --rows` / `pipeline --rows` | 拒绝（code 6） | 附带结果行 |
+| `query --format csv\|markdown\|table` 无 `--output` | 拒绝（code 6） | 直接打印表格 |
+| `datasets show` | 结构（无任何原值） | 结构（无任何原值） |
+| `datasets values` | 拒绝（code 6） | 显式数据动作，返回去重值 |
+| `actions show --full` / `actions output` | 拒绝（code 6） | 允许 |
+| `actions export` | 允许，但导出文件剥掉 `output.preview` | 允许完整导出 |
+| `deliver` | 允许（只给清单） | 允许 |
+
+**结构展示不含原始取值**：`ColumnSchema` 只有 `name` / `type` / `sql_type` / `nullable` / `unique` / `distinct_count` / `distinct_count_truncated` / `role` / `format`。`enum`、`samples`、`min`、`max` 不再生成，也不再出现在 `datasets show` 的输出里；需要枚举值时执行独立的 `datasets values`（见 5.5）。
+
+Action 文件仍可保存 `output.preview`（仅用于本机排查，`--preview-rows` 控制行数），但 `actions show` 默认不打印，强隐私下 `--full` 也被拒绝。注意 dtool 只能约束自己的命令，不能阻止调用方直接读文件；强隐私是契约层，真正的硬隔离靠工作区权限/容器沙箱。
 
 ### 4.4 Action 生命周期
 
@@ -226,6 +247,8 @@ started ──► running ──► success        退出码 0
                     ├─► failed         退出码 4（执行失败）/ 5（被 Ctrl+C、SIGTERM 中断）
                     └─► stale          退出码 5：进程被强杀，由看护进程（或下一条命令 / actions sync）收敛
 ```
+
+退出码：`0` 成功 / `2` 用法或参数错误 / `3` 找不到 / `4` 执行失败 / `5` 中断或 stale / `6` 隐私模式拒绝读取数据。
 
 - **started**：命令开始执行时立即写入 Action 文件（`status: "running"`）。
 - **success/failed**：执行结束时更新同一文件。
@@ -409,17 +432,18 @@ dtool query \
 | `--from` | 否 | 派生来源，用于关联上游 Action |
 | `--format` | 否 | 输出格式：`json` / `csv` / `markdown` / `table` / `xlsx`（xlsx 为二进制，必须配合 `--output`；数值写为数字单元格，表头加粗，列宽自适应） |
 | `--output` | 否 | 输出文件路径 |
-| `--rows` | 否 | 在 stdout 附带完整结果行；默认只输出摘要（行已写入 `result_file`） |
+| `--rows` | 否 | `normal` 下在 stdout 附带完整结果行；`strong`（默认）拒绝（code 6） |
 
 **内部实现**：
 
 - 重写 SQL：别名 / 文件路径（双引号、反引号，或 `FROM`/`JOIN` 后的裸路径）解析为文件，同一文件只载入一次。
 - 把用到的文件载入内存 SQLite（`sql.Open("sqlite", ":memory:")`，单连接），再执行查询，直接得到带类型的行（`int64` / `float64` / `string`）。
 - 沙箱：仅允许单条 `SELECT`/`WITH`（挡住 `ATTACH`/`PRAGMA`）；解析出的文件必须位于工作区、当前目录，或由 `--source` 显式绑定。
-- 根据 `--format` 格式化输出；完整结果始终落盘到产物文件，stdout 默认只输出结构/摘要（`--rows` 才附带行），并受 `--max-rows`（默认 10000）约束。
+- 根据 `--format` 格式化输出；完整结果始终落盘到产物文件，并受 `--max-rows`（默认 10000）约束。
+- `strong`（默认）stdout 只输出交付清单（见 4.3）；`normal` 才输出摘要，`--rows` 才附带行。
 - 支持 `context.Context` 超时（`--timeout`，默认 60s）。
 
-**stdout 输出示例（默认，json）**：
+**stdout 输出示例（`normal`，json）**：
 
 ```json
 {
@@ -431,7 +455,7 @@ dtool query \
 }
 ```
 
-加 `--rows` 才附带 `rows`。
+加 `--rows` 才附带 `rows`；默认 `strong` 下则只有 4.3 的交付清单。
 
 ### 5.3 `visualize`：结果 → 图表 / 表格
 
@@ -474,12 +498,29 @@ dtool pipeline \
   --tags "monthly-report"
 ```
 
-Pipeline 的各步骤**均为可选**：`--excel` 只做转换（数据持久化为独立的数据集 `datasets/<name>/`，可反复使用）；`--input <ref>` 复用已有数据而跳过转换；省略 `--sql` 则不查询，`--chart` 必须配合 `--sql`。SQL 中用 `data` 引用上游数据。执行的步骤生成子 Action，与父 Action 通过 `parent_id` 关联。stdout 默认只输出各步骤摘要与产物路径；`--rows` 才附带 `query.rows`。
+Pipeline 的各步骤**均为可选**：`--excel` 只做转换（数据持久化为独立的数据集 `datasets/<name>/`，可反复使用）；`--input <ref>` 复用已有数据而跳过转换；省略 `--sql` 则不查询，`--chart` 必须配合 `--sql`。SQL 中用 `data` 引用上游数据。执行的步骤生成子 Action，与父 Action 通过 `parent_id` 关联。`strong`（默认）stdout 只输出交付清单（data/schema/result/chart 文件位置）；`normal` 才输出摘要，`--rows` 才附带 `query.rows`。
 
 - 子步骤失败时，父 Action 置为 `failed`，`error.detail` 指明失败的子 Action ID；已成功的子 Action 保留，AI 可从失败点用 `--from` 续写，无需重跑。
 - 子步骤之间通过 Action 引用传递数据（内部等价于 `latest:` 的精确 ID 绑定），不在内存中隐式共享，保证每个子 Action 可单独复现。
 
-### 5.5 `actions`：查询、追踪、补充 Action
+### 5.5 `datasets`：结构查看与数据动作
+
+```bash
+# 只给结构：类型/可空/唯一/基数/角色，不含 enum/samples/min/max
+dtool datasets show sales
+
+# 显式数据动作：读取某列的去重取值（仅 normal；strong 下 code 6）
+dtool datasets values sales --column region --limit 20 --output values.json
+
+# 只看位置与发送方式（strong 也可用）
+dtool deliver <action_id>
+```
+
+`datasets values` 内部执行 `SELECT DISTINCT ... LIMIT N`，记录为一条 `query` Action（`input.purpose = distinct_values`，同时记录 `dataset` / `column` / `limit`），结果落盘。默认最多返回 20 个值，超过时 `truncated: true`。
+
+`deliver` 返回 `artifacts[]`（`path` / `abs_path` / `mime` / `bytes` / `sha256`）与 `send` 提示，不读文件内容；它不产生新 Action。
+
+### 5.6 `actions`：查询、追踪、补充 Action
 
 这是 AI 追踪进度、用户对话补充的核心命令组。
 
@@ -496,10 +537,10 @@ dtool actions list --type query --status success
 # 查看某个 Action 的完整详情（含注释、派生链；不含预览）
 dtool actions show 01HX7Z8K2M9PQR3STUVWXYZABC
 
-# 显式带出 output.preview
+# 显式带出 output.preview（仅 normal；strong 下拒绝）
 dtool actions show 01HX7Z8K2M9PQR3STUVWXYZABC --full
 
-# 查看某个 Action 的输出数据（完整数据，非预览）
+# 查看某个 Action 的输出数据（仅 normal；strong 下请用 deliver）
 dtool actions output 01HX7Z8K2M9PQR3STUVWXYZABC
 
 # 查看某条 Action 的派生/演进链路
@@ -553,7 +594,7 @@ dtool actions export --output .dtool/actions_dump.json
 
 ---
 
-### 5.6 `version` / `upgrade`：版本与自更新
+### 5.7 `version` / `upgrade`：版本与自更新
 
 ```bash
 dtool version [--short] [--deps]        # 版本与构建元数据；--short 只输出版本号，--deps 附带依赖模块版本
@@ -587,6 +628,8 @@ Excel ──► [convert] ──┬──► data.json
 
 ### 6.2 输出格式
 
+Schema **只描述结构，不含任何原始取值**。枚举/样例/极值属于数据层，走独立的数据动作（`datasets values`，仅 `normal`）。
+
 ```json
 {
   "source": "data.xlsx",
@@ -597,56 +640,61 @@ Excel ──► [convert] ──┬──► data.json
     {
       "name": "id",
       "type": "integer",
+      "sql_type": "INTEGER",
       "nullable": false,
       "unique": true,
-      "samples": [1, 2, 3]
+      "distinct_count": 1024,
+      "role": "identifier"
     },
     {
       "name": "region",
       "type": "string",
+      "sql_type": "TEXT",
       "nullable": false,
-      "enum": ["North", "South", "East", "West"],
-      "samples": ["North", "South"]
+      "distinct_count": 4,
+      "role": "category"
     },
     {
       "name": "amount",
       "type": "number",
+      "sql_type": "REAL",
       "nullable": true,
-      "min": 0,
-      "max": 99999.99,
-      "samples": [1500.00, 2300.50]
+      "distinct_count": 913,
+      "role": "measure"
     },
     {
       "name": "created_at",
       "type": "date",
+      "sql_type": "TEXT",
       "format": "2006-01-02",
-      "samples": ["2026-01-15", "2026-02-03"]
+      "distinct_count": 31,
+      "role": "time"
     }
   ]
 }
 ```
 
-这种格式对 AI 特别友好：
+这种格式对 AI 友好而不泄露数据：
 
-- **`type`** 直接告诉 AI 字段的 SQL 对应类型（`integer` → `INTEGER`，`date` → `DATE`）。
-- **`enum`** 让 AI 知道某字段的取值空间，便于生成 `WHERE region IN (...)` 这类查询。
-- **`samples`** 给 AI 提供具体值参考，减少猜测。
+- **`type` / `sql_type`** 告诉 AI 字段的 SQL 对应类型（`integer` → `INTEGER`，`date` → `TEXT` + `date()`）。
+- **`role`** 给出语义：`identifier`（唯一/标识，不要枚举）、`category`（低基数、可 GROUP BY）、`measure`（数值聚合）、`time`、`flag`、`text`。
+- **`distinct_count`** 告诉 AI 基数规模，但不出具体值；超过 10 万时 `distinct_count_truncated: true`。
 - **`nullable`** 提示 AI 是否需要处理 NULL。
-- **`min`/`max`** 帮助 AI 判断数值范围，避免生成越界条件。
+- **`enum` / `samples` / `min` / `max` 不在这里**；需要具体取值时执行 `datasets values`（仅 `normal`，strong 下 code 6）。
 
 ### 6.3 推断逻辑
 
 ```go
 type ColumnSchema struct {
-    Name     string   `json:"name"`
-    Type     string   `json:"type"`      // integer / number / boolean / date / string
-    Nullable bool     `json:"nullable"`
-    Unique   bool     `json:"unique,omitempty"`
-    Enum     []string `json:"enum,omitempty"`
-    Min      *float64 `json:"min,omitempty"`
-    Max      *float64 `json:"max,omitempty"`
-    Format   string   `json:"format,omitempty"` // 日期格式
-    Samples  []any    `json:"samples,omitempty"`
+    Name              string `json:"name"`
+    Type              string `json:"type"` // integer / number / boolean / date / string
+    SQLType           string `json:"sql_type"`
+    Nullable          bool   `json:"nullable"`
+    Unique            bool   `json:"unique,omitempty"`
+    DistinctCount     int    `json:"distinct_count,omitempty"`
+    DistinctTruncated bool   `json:"distinct_count_truncated,omitempty"`
+    Role              string `json:"role,omitempty"`
+    Format            string `json:"format,omitempty"` // 日期格式
 }
 
 func InferSchema(records []map[string]any, headers []string) []ColumnSchema {
@@ -654,9 +702,8 @@ func InferSchema(records []map[string]any, headers []string) []ColumnSchema {
     // 1. 收集所有非空值
     // 2. 依次尝试解析为 int64 / float64 / bool / time.Time
     // 3. 若全部成功，则确定类型；否则降级为 string
-    // 4. 统计 nullable、unique、min/max
-    // 5. 若唯一值数量 <= 阈值（如 20），输出 enum
-    // 6. 取前 3 个样本值
+    // 4. 统计 nullable、unique、distinct_count
+    // 5. 按类型/基数/唯一性推断 role；不收集任何原值
 }
 ```
 
@@ -670,11 +717,13 @@ func InferSchema(records []map[string]any, headers []string) []ColumnSchema {
 | 列中所有值匹配日期格式 | `date`（附 `format`） |
 | 混合类型或无法解析 | `string` |
 | 存在空值 | `nullable: true` |
-| 唯一值数 ≤ 20 且为字符串 | 输出 `enum` |
-| 唯一值数等于记录数 | `unique: true` |
+| 唯一值数等于记录数 | `unique: true`，`role: identifier` |
+| 字符串且去重数 ≤ 50、平均每个值至少重复 3 次 | `role: category` |
+| 其他字符串 | `role: text` |
+| 数值 / 日期 / 布尔 | `role: measure` / `time` / `flag` |
 | 以 `0` 开头的数字串 / 超 15 位整数 | 保持 `string`（防止丢失前导零与精度） |
 | 整列为空 | `type: "null"`，`nullable: true` |
-| 大数据量 | 单遍流式统计；`unique`/`enum` 的去重集合超过上限（如 10 万）即放弃并省略 |
+| 大数据量 | 单遍流式统计；去重集合超过上限（10 万）即停止收集并标记 `distinct_count_truncated` |
 
 `date` 在 SQLite 中实际以 TEXT 存储（ISO 8601），比较与排序依赖字符串序；Schema 中为 `date` 列附 `sql_type: "TEXT"` 提示 AI 使用 `date()` 等函数。
 
@@ -713,11 +762,11 @@ AI:  执行 dtool actions list --type query --limit 1
 
 ```
 AI:  执行 dtool datasets show sales，读取其中的 schema
-     得知 region 是 string 且有 enum，amount 是 number
+     得知 region 是 string、role=category（distinct_count=4），amount 是 number
      生成: SELECT region, SUM(amount) AS total
            FROM 'data.json'
-           WHERE region IN ('North', 'South')
            GROUP BY region
+     （具体有哪些 region：等用户切 normal 后再 datasets values，或让用户给值）
      （需要看具体值时显式加 --rows 或读 result_file）
 ```
 
@@ -729,7 +778,8 @@ AI:  执行 dtool datasets show sales，读取其中的 schema
 用户: "上次那个按地区的汇总，再按季度拆一下"
 AI:  1. 执行 dtool actions list --type query --limit 1
         获取 Action 01HX...B，读取其 output.columns 和 summary
-        （需要具体值时才 actions show --full / actions output）
+        （默认 strong 只看 summary；需要具体值时，等用户把配置改成 normal
+          后再 actions show --full / actions output）
      2. 执行 dtool query \
           --from action:01HX...B \
           --sql "SELECT region, quarter, SUM(total) AS total
@@ -737,7 +787,7 @@ AI:  1. 执行 dtool actions list --type query --limit 1
                  GROUP BY region, quarter" \
           --notes "按季度拆分上次的汇总"
      3. 新 Action 的 derived_from 指向 01HX...B
-     4. 回答: "已按季度拆分，结果如下..."
+     4. 回答: "已按季度拆分，结果已生成；我把文件发给你"
 ```
 
 **场景：给某一步加备注，供后续 AI 参考**
@@ -859,7 +909,7 @@ func ConvertExcel(o Options) (*Result, error) {
   15 万行 × 9 列要多花 855MB。合并单元格数量改为直接扫 zip 里的 worksheet XML
   （逐 token、内存 O(1)，见 `internal/converter/merge.go`）。
 - 类型推断不能只看采样，必须整列：阶段 1 的 `colStat` 累积「是否全部满足整数/数字/
-  布尔/日期」、非空数、去重数（≤10 万）、首个不同值（用于 enum 与样例）、min/max。
+  布尔/日期」、非空数、去重数（≤10 万）；**不收集任何原值**（enum/samples/min/max 已移除）。
   `InferSchema` 也改为用同一个 `colStat`，保证「整列推断」只有一份实现。
 - `data.json` 由 `rowWriter` 逐行写出，缩进与 `json.MarshalIndent([]types.Row, "", "  ")`
   完全一致（有测试逐字节比对），因此产物对下游没有格式变化。
@@ -1052,7 +1102,10 @@ font: /usr/share/fonts/truetype/arphic/uming.ttc
 workspace: .dtool
 preview_rows: 20
 load_mode: auto       # auto / stream / full
+privacy: strong       # strong（默认）/ normal；只能用户本人改配置文件
 ```
+
+`privacy` 刻意不做命令行开关，也不读环境变量；自动化代理无法用参数绕过强隐私，只能由用户显式修改这个文件。`-c` 指向的配置应视为用户输入，不应让代理生成/改写。
 
 ### 8.6 输出格式化模块
 

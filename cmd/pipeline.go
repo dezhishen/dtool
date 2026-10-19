@@ -19,6 +19,11 @@ func newPipelineCmd() *cobra.Command {
 					return err
 				}
 			}
+			if rowsFlag {
+				if err := forbidStrong("把 query 结果行输出到 stdout（--rows）"); err != nil {
+					return err
+				}
+			}
 			applyFont(c, &cfg.Font)
 			env, err := newEnv(c.Context())
 			if err != nil {
@@ -27,6 +32,21 @@ func newPipelineCmd() *cobra.Command {
 			res, err := env.Pipeline(cfg)
 			if err != nil {
 				return err
+			}
+			if strongPrivacy() {
+				var items []artifactItem
+				if res.Convert != nil {
+					addArtifact(&items, "data", res.Convert.DataFile)
+					addArtifact(&items, "schema", res.Convert.SchemaFile)
+				}
+				if res.Query != nil {
+					addArtifact(&items, "result", res.Query.ResultFile)
+					addArtifact(&items, "output", res.Query.OutputFile)
+				}
+				if res.Chart != nil {
+					addArtifact(&items, "chart", res.Chart.File)
+				}
+				return printDelivery(c, res.ActionID, items...)
 			}
 			if !rowsFlag && res.Query != nil {
 				res.Query.Rows = nil // 默认只输出摘要；明细已在 result_file

@@ -46,7 +46,7 @@ dtool 面向 Agent 设计：你只描述**目标和产物**，不必指定命令
 - **说清三件事**：数据文件（或数据集名）、要什么产物（图 / 表 / Excel / CSV）、口径（时间段、
   是否含退款、Top N）。
 - **别自己拼列名**：让 Agent 先 `dtool datasets show <name>` 看列名与类型，再写 SQL（列名写错会报 `no such column`）。
-- **要结论不要过程**：默认只看 Action 的 `summary` / `columns` / `row_count`；需要具体值时再 `query --rows` 或 `dtool actions output <id>`（完整产物），`actions show --full` 可带出落盘的预览行。
+- **要结论不要过程**：默认强隐私，只把产物文件（`artifacts[].abs_path`）发给用户；需要具体值时，等用户本人把配置改成 `privacy: normal` 后，再用 `query --rows` 或 `dtool datasets values`。Agent 不得自行改配置绕过。
 - **口径要落盘**：让 Agent 用 `--tags 月报 --notes "口径：含已退款"` 记录，之后 `actions list` / `trace` 能追溯。
 - **出错就让它自查**：`dtool actions list --status failed --limit 1` → `actions show <id>`，错误里带
   `detail` / `hint`（例如「改用 `--load-mode stream`」「表名请用 `--source` 绑定」）。
@@ -66,7 +66,7 @@ AI  ｜ JOIN customers → 导出 top_customers.xlsx（Action 01M4…）
 AI  ｜ convert sales.xlsx → query（SQL 见下）→ visualize，口径「不含已退款」
 ```
 
-Agent 侧的行为约定（先 `datasets show` 再写 SQL、默认只看摘要与结构、失败先自查 Action）见
+Agent 侧的行为约定（先 `datasets show` 再写 SQL、默认只交付文件、失败先自查 Action）见
 [SKILL.md](../../skills/dtool/SKILL.md)。
 
 ## 四条通用规则

@@ -19,12 +19,15 @@
 | # | 命令 | 作用 |
 |---|------|------|
 | 1 | `dtool convert --input ../data/hr.xlsx --name hr` | 单工作表工作簿可直接转换（省略 `--sheet`） |
-| 2 | `dtool datasets show hr` | 观察 Schema：`工号` 是 string（前导零不丢）、`绩效` 可空、`部门` 带枚举 |
+| 2 | `dtool datasets show hr` | 观察结构：`工号` 是 string（前导零不丢）、`绩效` 可空、`部门` 是 `category`（6 个去重值，不含具体值） |
 | 3 | `dtool query --sql '…COUNT/AVG…GROUP BY 部门'` + `visualize --type pie` | 各部门人数与平均月薪 → 饼图 |
 | 4 | `dtool query --format csv --output recent_hires.csv --sql '…WHERE 入职日期 >= …'` | 日期是 ISO 文本，可直接比较；导出 CSV |
 | 5 | `dtool query --sql '…WHERE 绩效 IS NULL'` + `visualize --type table --format xlsx` | 用 `IS NULL` 找待评估人员，并整表导出 Excel |
 
 ## 运行
+
+默认强隐私：脚本不依赖 stdout 明细，产物都在 `examples/out/02-hr-analysis/`；需要自己看具体值时，
+由用户本人把配置文件改成 `privacy: normal`。
 
 ```bash
 make build                            # 或 go build -o dtool .

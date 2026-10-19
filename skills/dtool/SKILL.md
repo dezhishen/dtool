@@ -1,6 +1,6 @@
 ---
 name: dtool
-description: 本地数据 Pipeline CLI。用于把 Excel 转成可复用的数据集（JSON + Schema），用 SQL 查询，输出表格（CSV/Markdown/Excel）或图表（PNG/SVG），并把每一步记录为可追溯的 Action。当用户要分析 Excel 数据、做汇总/图表/导出，或追问"之前的结果/进度"时使用。
+description: 本地数据 Pipeline CLI（默认强隐私：结果只落盘，stdout 只给交付清单）。用于把 Excel 转成可复用的数据集（JSON + Schema），用 SQL 查询，输出表格（CSV/Markdown/Excel）或图表（PNG/SVG），并把每一步记录为可追溯的 Action。当用户要分析 Excel 数据、做汇总/图表/导出，或追问"之前的结果/进度"时使用。
 ---
 
 # dtool 使用指南（Agent Skill 正文）
@@ -46,21 +46,33 @@ dtool version                                        # 确认可用（含 versio
 | 概念 | 说明 |
 |------|------|
 | 工作区 | 默认 `./.dtool`（`--workspace` 或 `-c config.yaml` 指定），所有状态都在里面，可整体搬迁 |
-| 数据集 | `convert` 的产物，位于 `.dtool/datasets/<name>/`：`data.json`、`data.schema.json`（必有，含列类型/可空/枚举/样例/`updated_at`）、`dataset.json`。独立于 Action，可随时复用；同名重新转换会覆盖并刷新 `updated_at` |
+| 数据集 | `convert` 的产物，位于 `.dtool/datasets/<name>/`：`data.json`、`data.schema.json`（必有，**只含结构**：列类型/可空/唯一/基数/角色/`updated_at`，不含枚举/样例/极值）、`dataset.json`。独立于 Action，可随时复用；同名重新转换会覆盖并刷新 `updated_at` |
 | Action | 每次命令的完整记录（输入、产物、预览、错误、注释），位于 `.dtool/actions/`。读 Action 即可理解历史，无需重跑 |
 | 引用 | `dataset:<name>`、`action:<id>`、`latest:<type>`（最近一次成功的 convert/query/…）、或文件路径 |
+
+## 隐私模式（默认 strong）
+
+- 默认 `privacy: strong`。结果类命令的 stdout **只有交付清单**：`action_id` + `artifacts[]`（`path`/`abs_path`/`mime`/`bytes`/`sha256`）+ `send`（怎么发），不含 `columns`、`rows`、`row_count`、`preview`。
+- **Agent 不得修改配置文件里的 `privacy`，也不得新建/改写配置后通过 `-c` 传入，或用参数绕过**。它只能由用户本人显式改；没有命令行开关、不读环境变量。`-c` 指向的配置应视为用户输入。
+- 强隐私下以下动作直接失败（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`actions show --full`、`actions output`。
+- 结构类命令仍可用：`datasets show` 只给 `type`/`nullable`/`unique`/`distinct_count`/`role`，不含 `enum`/`samples`/`min`/`max`；需要枚举值必须等用户把配置改成 `normal` 后再执行 `datasets values`。
+- 交付方式：把 `artifacts[].abs_path` 作为文件附件发给用户，不读取、不复述内容；`dtool deliver <action_id>` 可随时重新取清单。dtool 不能阻止调用方直接读文件，**强隐私是契约，不是沙箱**：不要主动去读产物文件。
 
 ## 标准流程
 
 ```bash
 # 1. 导入：Excel → 数据集（Schema 自动生成）
 dtool convert --input sales.xlsx --name sales
-dtool datasets show sales              # 位置 + Schema（类型/枚举，不含样例值；明细读 data_file）
+dtool datasets show sales              # 位置 + 结构（类型/可空/唯一/基数/角色；不含任何值）
 
-# 2. 查询：数据集名直接当表名
-dtool query --sql 'SELECT region, SUM(amount) AS total FROM sales GROUP BY region ORDER BY total DESC'
+# 默认强隐私：结果只落盘，stdout 只给交付清单（artifacts + send）
+# 把 artifacts[].abs_path 作为附件发给用户，不要读取内容
+dt delivery <action_id>
 
-# 3. 出图 / 导出
+# 2. 查询：数据集名直接当表名（默认只返回清单，不返回结果）
+dt query --sql 'SELECT region, SUM(amount) AS total FROM sales GROUP BY region ORDER BY total DESC'
+
+# 3. 出图 / 导出（产物落盘，stdout 仍是交付清单）
 dtool visualize --input latest:query --type bar --x region --y total --title "区域销量" --output out/sales.png
 dtool visualize --input latest:query --type bar --x region --y total --group-by quarter  # 分组柱 / 多条折线
 dtool visualize --input latest:query --type line --x month --y sales,profit            # 宽表多列 → 多折线
@@ -76,17 +88,18 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 
 | 命令 | 要点 |
 |------|------|
-| `convert --input f.xlsx [--sheet S] [--name N]` | 仅 `.xlsx`；`--name` 缺省取文件名（指定 sheet 时追加 `_<sheet>`）；输出含 `data_file`/`schema_file`/`updated_at`/`warnings` |
+| `convert --input f.xlsx [--sheet S] [--name N]` | 仅 `.xlsx`；`--name` 缺省取文件名（指定 sheet 时追加 `_<sheet>`）；默认只返回交付清单（data/schema 文件位置） |
 | `meminfo [--source alias=文件]...` | 内存排查入口：预算来源（cgroup / Job Object / 系统可用内存 / `--max-memory`）、原始探测字段（`job_object`）、看门狗开关，以及按当前输入的**预检预演**（`verdict: ok/borderline/risky/forced`，以及选中的执行档 `plan.chosen` 与理由——预检与真正执行走同一套选档逻辑）。受限环境里「预检为什么没拦住」先跑它 |
-| `datasets list \| show <name> \| delete <name>` | 查阅/删除数据集；回答"有哪些数据、有哪些列"用这个（show 不输出明细） |
-| `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--rows] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | 默认只输出摘要（`row_count`/`columns`/`result_file`）；`--rows` 才带结果行；`xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
+| `datasets list \| show <name> \| values <name> --column C \| delete <name>` | `show` 只给结构（`type`/`nullable`/`unique`/`distinct_count`/`role`，**无 enum/samples/min/max**）；`values` 是显式数据动作，**仅 normal 可用**，strong 下 code 6 |
+| `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--rows] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | 默认（strong）只返回交付清单；`--rows` 仅在 normal 可用；`xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y[,Y2...] [--group-by G] [--missing zero\|gap] [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y，且忽略多系列参数；y 必须是数值列；`--group-by`（长表透视）与多 `--y`（宽表直取）互斥，均仅 bar/line，不能与 x/y 同列；缺失组合默认补 0，`--missing gap`（仅 line）改为断线；重复 (x, group) 报错 |
-| `pipeline --excel f \| --input ref [--sql ...] [--chart ...] [--rows]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据；默认只输出各步骤摘要，`--rows` 才附带 `query.rows` |
+| `pipeline --excel f \| --input ref [--sql ...] [--chart ...] [--rows]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据；默认只返回交付清单，`--rows` 仅 normal 可用 |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，会在 ~0.25s 内被看护进程落盘收敛，见下） |
-| `actions show <id> [--full] \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `show` 默认不输出 `output.preview`，`--full` 显式带出；`output` 输出完整产物；`annotate` 把用户口径/备注写进 Action；`sync` 显式收敛状态（把被强杀的 `running` 落盘为 `stale`，并列出真在跑的任务） |
+| `actions show <id> [--full] \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `show` 默认不输出 `output.preview`；`--full` / `output` **仅 normal 可用**（strong 下 code 6）；`export` 在 strong 下自动剥掉 preview；`annotate` 写用户口径/备注；`sync` 收敛状态 |
+| `deliver <id>` | 只返回产物清单（`path`/`abs_path`/`mime`/`bytes`/`sha256` + `send` 提示），不读内容；strong 下也可用 |
 | `--store auto\|memory\|disk` | SQLite 库落在哪：auto（按预算选档）/ memory（快）/ disk（峰值最低） |
 | `--mem-policy try\|strict` | 所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败 |
-| `-c, --config f.yaml` | 配置文件（YAML：font / workspace / preview_rows 等）；命令行参数优先 |
+| `-c, --config f.yaml` | 配置文件（YAML：font / workspace / preview_rows / privacy 等）；命令行参数优先 |
 | `--sandbox` | 默认开启：SQL 只允许单条 SELECT，且只能读工作区 / 当前目录 / `--source` 文件；`--sandbox=false` 关闭 |
 | `--update [--pre]` / `upgrade [--version V] [--pre] [--skills[=路径]]` | 检查更新 / 升级自身；`--skills` 顺带另存该版本的 SKILL.md（目录 / `.md` 文件 / 裸写法=当前目录）；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
 
@@ -137,9 +150,10 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 
 ## 读取结果的方式
 
-- **stdout 默认只给结构与摘要**：`query`/`pipeline` 不打印明细行，`datasets show` 不打印预览，`actions show` 不打印 `output.preview`。数据已经落盘，不要为了“看一眼”把整表拉进上下文。
-- 需要具体值时才显式取：`query --rows` / `pipeline --rows`（少量行），或读 `result_file` / `actions output <id>`（完整产物）；`actions show <id> --full` 带出 Action 里的预览行。
-- 回答"有什么数据、有哪些列"用 `datasets show` 的 `schema` 与 `actions list` 的 `columns`/`summary`，不依赖明细。
+- 默认强隐私：**不要读结果文件**。`query`/`pipeline`/`visualize`/`convert` 的 stdout 只有交付清单；把 `artifacts[].abs_path` 作为附件发给用户即可。
+- 需要重申交付内容时用 `dtool deliver <action_id>`，它只返回 `path`/`abs_path`/`mime`/`bytes`/`sha256` 与 `send` 提示。
+- 回答“有哪些数据、有哪些列”用 `datasets show` 的结构字段（`type`/`nullable`/`unique`/`distinct_count`/`role`），不依赖具体值。
+- 只有用户本人把配置改成 `privacy: normal` 后，才允许 `query --rows` / `datasets values` / `actions show --full` / `actions output`。Agent 不得自行改配置或建议绕过。
 - 产物路径都是相对项目目录的：数据集 `.dtool/datasets/<name>/`，查询 `.dtool/outputs/queries/<id>/result.json`，图表 `.dtool/outputs/charts/<id>/`。
 
 ## 对话场景
@@ -183,7 +197,10 @@ stdout 错误 JSON：`{"error","detail","hint","code","action_id"}`。退出码�
 font: /usr/share/fonts/truetype/arphic/uming.ttc   # 相对路径相对配置文件，支持 ~/
 workspace: .dtool
 preview_rows: 20
+privacy: strong   # 默认；只有用户本人可改成 normal
 ```
+
+`privacy` 没有命令行开关、不读环境变量。Agent 不得修改它来绕过强隐私。
 
 ## 装入方式与大数据的现实边界
 
@@ -271,7 +288,7 @@ harness 若用 `CreateJobObjectW` + `AssignProcessToJobObject` 做沙箱，先�
 
 ## 注意事项
 
-- **先看 Schema 再写 SQL**：`datasets show <name>` 的 `enum` 给出取值空间，`type` 给出列类型，`nullable` 提示是否要处理 NULL。
+- **先看结构再写 SQL**：`datasets show <name>` 的 `type`/`role`/`distinct_count` 告诉列类型与基数，`nullable` 提示是否处理 NULL；具体枚举值不在结构里，需要时等用户切到 `normal` 后用 `datasets values`。
 - 前导零数字串（如 `00123`、手机号）和超过 15 位的整数会保持 `string`；空表头自动命名 `col_N`，重复表头追加 `_N`，合并单元格仅首格有值——这些都会出现在 `warnings`。
 - 图表上限 1000 个数据点；`line/bar/pie` 只接受 `png`/`svg`。
 - `--no-record` 的结果之后无法用 `action:`/`latest:` 引用。

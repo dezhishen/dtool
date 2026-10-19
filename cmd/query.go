@@ -35,6 +35,14 @@ func newQueryCmd() *cobra.Command {
 			if err := requireFlags(c, "sql"); err != nil {
 				return err
 			}
+			if strongPrivacy() {
+				if rowsFlag {
+					return forbidStrong("把结果行输出到 stdout（--rows）")
+				}
+				if p.Format != "json" && p.Output == "" {
+					return forbidStrong(fmt.Sprintf("把 %s 数据直接输出到 stdout", p.Format))
+				}
+			}
 			var err error
 			if p.Sources, err = parseSources(sources); err != nil {
 				return err
@@ -47,6 +55,12 @@ func newQueryCmd() *cobra.Command {
 			res, err := env.Query(p, "")
 			if err != nil {
 				return err
+			}
+			if strongPrivacy() {
+				var items []artifactItem
+				addArtifact(&items, "result", res.ResultFile)
+				addArtifact(&items, "output", res.OutputFile)
+				return printDelivery(c, res.ActionID, items...)
 			}
 			if p.Format == "" || p.Format == "json" || p.Output != "" {
 				if !rowsFlag {

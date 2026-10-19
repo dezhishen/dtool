@@ -12,14 +12,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Privacy 是隐私模式。默认强隐私：stdout 只给交付清单，不给任何数据。
+// 只能由用户显式修改配置文件切换，命令行不提供覆盖入口。
+type Privacy string
+
+const (
+	PrivacyStrong Privacy = "strong" // 默认：结果只落盘，stdout 只给文件位置/发送方式
+	PrivacyNormal Privacy = "normal" // 普通：允许显式数据动作（--rows / datasets values）
+)
+
+// ParsePrivacy 解析配置里的 privacy；空值按 strong 处理。
+func ParsePrivacy(s string) (Privacy, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", string(PrivacyStrong):
+		return PrivacyStrong, nil
+	case string(PrivacyNormal):
+		return PrivacyNormal, nil
+	default:
+		return "", types.Errorf(types.CodeUsage, "invalid privacy %q", s).
+			WithHint("只能是 strong（默认）或 normal；强隐私下请勿把该值暴露给自动化代理")
+	}
+}
+
 // Config 对应 -c config.yaml；命令行参数优先于配置文件。
 type Config struct {
-	Font        string `yaml:"font"`         // TTF/TTC 字体路径，用于图表中文
-	Workspace   string `yaml:"workspace"`    // 工作区目录
-	PreviewRows int    `yaml:"preview_rows"` // Action 预览行数
-	LoadMode    string `yaml:"load_mode"`    // JSON 装入方式：auto / stream / full
-	Store       string `yaml:"store"`        // 落库位置：auto / memory / disk
-	MemPolicy   string `yaml:"mem_policy"`   // 都超预算时：try / strict
+	Font        string  `yaml:"font"`         // TTF/TTC 字体路径，用于图表中文
+	Workspace   string  `yaml:"workspace"`    // 工作区目录
+	PreviewRows int     `yaml:"preview_rows"` // Action 预览行数
+	LoadMode    string  `yaml:"load_mode"`    // JSON 装入方式：auto / stream / full
+	Store       string  `yaml:"store"`        // 落库位置：auto / memory / disk
+	MemPolicy   string  `yaml:"mem_policy"`   // 都超预算时：try / strict
+	Privacy     Privacy `yaml:"privacy"`      // strong（默认）/ normal；只能由用户改配置文件设置
 }
 
 // Load 读取配置；font/workspace 中的相对路径相对配置文件所在目录解析，支持 ~/ 前缀。

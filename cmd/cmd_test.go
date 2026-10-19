@@ -13,8 +13,20 @@ import (
 )
 
 // run 以给定参数执行 CLI，返回 stdout、退出错误。
+// 既有用例默认在 normal 隐私下跑；强隐私用例用 runRaw。
 func run(t *testing.T, args ...string) (map[string]any, error) {
+	return runWith(t, true, args...)
+}
+
+func runRaw(t *testing.T, args ...string) (map[string]any, error) {
+	return runWith(t, false, args...)
+}
+
+func runWith(t *testing.T, normal bool, args ...string) (map[string]any, error) {
 	t.Helper()
+	if normal {
+		args = ensureNormalPrivacy(t, args)
+	}
 	t.Setenv("DTOOL_NO_REAPER", "1") // 单测不派生看护进程
 	oldArgs, oldOut := os.Args, os.Stdout
 	r, w, _ := os.Pipe()
@@ -35,7 +47,18 @@ func run(t *testing.T, args ...string) (map[string]any, error) {
 
 // runStreams 与 run 相同，但同时捕获 stderr（用于断言提示信息）。
 func runStreams(t *testing.T, args ...string) (string, error) {
+	return runStreamsWith(t, true, args...)
+}
+
+func runStreamsRaw(t *testing.T, args ...string) (string, error) {
+	return runStreamsWith(t, false, args...)
+}
+
+func runStreamsWith(t *testing.T, normal bool, args ...string) (string, error) {
 	t.Helper()
+	if normal {
+		args = ensureNormalPrivacy(t, args)
+	}
 	t.Setenv("DTOOL_NO_REAPER", "1")
 	oldArgs, oldStreams := os.Args, [2]*os.File{os.Stdout, os.Stderr}
 	rOut, wOut, _ := os.Pipe()
@@ -51,6 +74,42 @@ func runStreams(t *testing.T, args ...string) (string, error) {
 	rOut.Close()
 	rErr.Close()
 	return string(b), err
+}
+
+// ensureNormalPrivacy 让既有用例在 normal 隐私下运行：
+// 用例自带 -c 时把 privacy: normal 写进该配置；否则追加一个临时配置。
+func ensureNormalPrivacy(t *testing.T, args []string) []string {
+	t.Helper()
+	path := ""
+	for i, a := range args {
+		switch {
+		case (a == "-c" || a == "--config") && i+1 < len(args):
+			path = args[i+1]
+		case strings.HasPrefix(a, "--config="):
+			path = strings.TrimPrefix(a, "--config=")
+		}
+		if path != "" {
+			break
+		}
+	}
+	if path == "" {
+		p := filepath.Join(t.TempDir(), "privacy.yaml")
+		if err := os.WriteFile(p, []byte("privacy: normal\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return append([]string{"-c", p}, args...)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return args // 让原命令自己报配置缺失
+	}
+	if strings.Contains(string(b), "privacy:") {
+		return args
+	}
+	if err := os.WriteFile(path, append(b, []byte("\nprivacy: normal\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return args
 }
 
 // --load-mode 只对 JSON 装入（query / pipeline）生效：发给 convert 会被忽略，

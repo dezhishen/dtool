@@ -11,7 +11,7 @@
 - 要跨表 JOIN（订单 ↔ 客户），又不想写代码导数据；
 - 结果要同时给「开会看图的人」和「要 Excel 的人」；
 - 要画「区域 × 月份」这种多系列对比（分组柱 / 多条折线）；
-- 想知道每一列被推断成了什么类型（数值 / 文本 / 日期 / 枚举值）。
+- 想知道每一列被推断成了什么类型（数值 / 文本 / 日期 / 分类字段）。
 
 **数据源**：[`../data/sales.xlsx`](../data/sales.xlsx)，`订单` 120 行 + `客户` 15 行，字段说明见
 [示例总览](../README.md#数据字典)。
@@ -20,9 +20,9 @@
 
 | # | 命令 | 作用 |
 |---|------|------|
-| 1 | `dtool convert --input ../data/sales.xlsx --sheet 订单 --name orders` | 工作表 → 数据集 `orders`（JSON + Schema：类型 / 可空 / 枚举） |
+| 1 | `dtool convert --input ../data/sales.xlsx --sheet 订单 --name orders` | 工作表 → 数据集 `orders`（JSON + Schema：类型 / 可空 / 唯一 / 基数） |
 | 2 | `dtool convert … --sheet 客户 --name customers` | 同一个工作簿的另一个工作表 → 数据集 `customers` |
-| 3 | `dtool datasets list` / `dtool datasets show orders` | 看有哪些数据集、列名叫什么、类型推断结果（明细读 `data_file`） |
+| 3 | `dtool datasets list` / `dtool datasets show orders` | 看有哪些数据集、列名叫什么、类型推断结果（只给结构；取具体值需用户切到 normal 后 `datasets values`） |
 | 4 | `dtool query --format markdown --output region.md --sql '…'` | 剔除已退款订单，按区域汇总，直接产出 Markdown 表格 |
 | 5 | `dtool visualize --input latest:query --type bar …` | 复用上一步的结果出柱状图（`latest:query` = 最近一次查询，不重跑 SQL） |
 | 6 | `dtool query … substr("日期",1,7) AS "月份" …` + `dtool visualize --group-by 月份/区域` | 区域 × 月份透视：`--type bar` 出分组柱状图，`--type line` 出多条折线 |

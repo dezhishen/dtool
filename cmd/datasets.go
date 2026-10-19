@@ -2,9 +2,14 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/dezhishen/dtool/internal/dataset"
+	"github.com/dezhishen/dtool/internal/pipeline"
+	"github.com/dezhishen/dtool/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -34,7 +39,7 @@ func newDatasetsCmd() *cobra.Command {
 	}
 
 	show := &cobra.Command{
-		Use: "show <name>", Short: "查看数据集：位置与 Schema（明细直接读 data_file）", Args: cobra.ExactArgs(1),
+		Use: "show <name>", Short: "查看数据集：位置与结构（取值走 datasets values）", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			ds, err := store()
 			if err != nil {
@@ -47,11 +52,14 @@ func newDatasetsCmd() *cobra.Command {
 			doc := map[string]any{"dataset": info}
 			var schema map[string]any
 			if b, err := os.ReadFile(ds.SchemaPath(args[0])); err == nil && json.Unmarshal(b, &schema) == nil {
-				// samples 是具体值，属于明细；stdout 只给结构（类型/可空/枚举等）。
+				// 兼容旧数据集：即使 schema 文件里还留着原值字段，展示时也一律剥掉。
 				if cols, ok := schema["columns"].([]any); ok {
 					for _, c := range cols {
 						if m, ok := c.(map[string]any); ok {
+							delete(m, "enum")
 							delete(m, "samples")
+							delete(m, "min")
+							delete(m, "max")
 						}
 					}
 				}
@@ -60,6 +68,60 @@ func newDatasetsCmd() *cobra.Command {
 			return printJSON(c.OutOrStdout(), doc)
 		},
 	}
+
+	var column string
+	var limit int
+	var output string
+	values := &cobra.Command{
+		Use: "values <name> --column <col>", Short: "数据动作：读取某列的去重取值", Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if err := requireFlags(c, "column"); err != nil {
+				return err
+			}
+			if err := forbidStrong("执行 datasets values（读取具体取值）"); err != nil {
+				return err
+			}
+			if limit <= 0 {
+				return types.Errorf(types.CodeUsage, "--limit 必须大于 0")
+			}
+			name, col := args[0], column
+			esc := func(s string) string { return strings.ReplaceAll(s, `"`, `""`) }
+			sql := fmt.Sprintf(`SELECT DISTINCT "%s" AS value FROM "%s" WHERE "%s" IS NOT NULL ORDER BY value LIMIT %d`,
+				esc(col), esc(name), esc(col), limit+1)
+			env, err := newEnv(c.Context())
+			if err != nil {
+				return err
+			}
+			res, err := env.Query(pipeline.QueryParams{
+				SQL: sql, Format: "json", Output: output, MaxRows: limit + 1,
+				Timeout: 60 * time.Second, Sandbox: true,
+				Extra: map[string]any{"purpose": "distinct_values", "dataset": name, "column": col, "limit": limit},
+			}, "")
+			if err != nil {
+				return err
+			}
+			vals := make([]any, 0, len(res.Rows))
+			for _, r := range res.Rows {
+				if v, ok := r.Get("value"); ok {
+					vals = append(vals, v)
+				}
+			}
+			truncated := len(vals) > limit
+			if truncated {
+				vals = vals[:limit]
+			}
+			doc := map[string]any{"success": true, "dataset": name, "column": col,
+				"values": vals, "returned": len(vals), "truncated": truncated,
+				"result_file": res.ResultFile, "action_id": res.ActionID}
+			if res.OutputFile != "" {
+				doc["output_file"] = res.OutputFile
+			}
+			return printJSON(c.OutOrStdout(), doc)
+		},
+	}
+	values.Flags().StringVar(&column, "column", "", "要读取取值的列名")
+	values.Flags().IntVar(&limit, "limit", 20, "最多返回多少个去重值")
+	values.Flags().StringVar(&output, "output", "", "同时写一份 JSON 结果到该文件")
 
 	del := &cobra.Command{
 		Use: "delete <name>", Short: "删除数据集（已有 Action 记录保留，但不再能引用它）", Args: cobra.ExactArgs(1),
@@ -75,6 +137,6 @@ func newDatasetsCmd() *cobra.Command {
 		},
 	}
 
-	c.AddCommand(list, show, del)
+	c.AddCommand(list, show, values, del)
 	return c
 }

@@ -42,6 +42,11 @@ var g globalFlags
 // cfgFont 来自配置文件的字体路径；--font 优先。
 var cfgFont string
 
+// privacyMode 默认强隐私；只能由配置文件 privacy 切换，命令行不提供覆盖入口。
+var privacyMode = config.PrivacyStrong
+
+func strongPrivacy() bool { return privacyMode == config.PrivacyStrong }
+
 // Execute 运行根命令；失败时在 stdout 输出 ErrorResponse JSON，人类可读信息写 stderr。
 func Execute(version string) error {
 	info := buildinfo.Get()
@@ -55,7 +60,7 @@ func Execute(version string) error {
 		PersistentPreRunE: loadConfig,
 	}
 	pf := root.PersistentFlags()
-	pf.StringVarP(&g.config, "config", "c", "", "配置文件（YAML：font / workspace / preview_rows）")
+	pf.StringVarP(&g.config, "config", "c", "", "配置文件（YAML：font / workspace / preview_rows / privacy）")
 	pf.StringVar(&g.workspace, "workspace", ".dtool", "工作区目录")
 	pf.StringVar(&g.tags, "tags", "", "逗号分隔的标签，写入 Action metadata")
 	pf.StringVar(&g.notes, "notes", "", "备注，写入 Action metadata")
@@ -87,7 +92,8 @@ func Execute(version string) error {
 
 	root.SetVersionTemplate("dtool version " + info.Summary() + "\n")
 	root.AddCommand(newVersionCmd(info), newUpgradeCmd(version), newConvertCmd(), newQueryCmd(),
-		newVisualizeCmd(), newPipelineCmd(), newActionsCmd(), newDatasetsCmd(), newReapCmd(), newMemInfoCmd())
+		newVisualizeCmd(), newPipelineCmd(), newActionsCmd(), newDatasetsCmd(), newDeliverCmd(),
+		newReapCmd(), newMemInfoCmd())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -199,6 +205,8 @@ func warnInertLoadMode(c *cobra.Command) {
 
 func loadConfig(c *cobra.Command, _ []string) error {
 	cfgFont = ""
+	// 每次执行都从 strong 开始：不读环境变量、不读命令行参数。
+	privacyMode = config.PrivacyStrong
 	if g.loadMode == "" {
 		g.loadMode = "auto"
 	}
@@ -257,6 +265,13 @@ func loadConfig(c *cobra.Command, _ []string) error {
 	}
 	if cfg.PreviewRows > 0 && !c.Flags().Changed("preview-rows") {
 		g.previewRows = cfg.PreviewRows
+	}
+	if cfg.Privacy != "" {
+		p, err := config.ParsePrivacy(string(cfg.Privacy))
+		if err != nil {
+			return err
+		}
+		privacyMode = p
 	}
 	return nil
 }

@@ -21,6 +21,8 @@ const (
 	CodeExec     = 4
 	// CodeInterrupted 表示被中断：该步未完成，结果未知，可安全重试。
 	CodeInterrupted = 5
+	// CodeForbidden 表示当前隐私模式拒绝读取/输出具体数据。
+	CodeForbidden = 6
 )
 
 // Row 是保持列顺序的一行数据。
@@ -131,6 +133,30 @@ type PipelineResult struct {
 	Query    *QueryResult     `json:"query,omitempty"`
 	Chart    *VisualizeResult `json:"chart,omitempty"`
 	ActionID string           `json:"action_id,omitempty"`
+}
+
+// Artifact 描述一个已经落盘的产物；强隐私模式下 stdout 只给这些元信息。
+type Artifact struct {
+	Role    string `json:"role"` // data / schema / result / output / chart
+	Path    string `json:"path"` // 相对路径（便于复现）
+	AbsPath string `json:"abs_path"`
+	MIME    string `json:"mime"`
+	Bytes   int64  `json:"bytes"`
+	SHA256  string `json:"sha256"`
+}
+
+// SendHint 告诉调用方“怎么发”：只发文件，不读内容。
+type SendHint struct {
+	Mode string `json:"mode"` // attachment
+	Hint string `json:"hint"`
+}
+
+// Delivery 是强隐私模式的 stdout 契约：结果在哪、怎么发。
+type Delivery struct {
+	Success   bool       `json:"success"`
+	ActionID  string     `json:"action_id,omitempty"`
+	Artifacts []Artifact `json:"artifacts"`
+	Send      SendHint   `json:"send"`
 }
 
 type ErrorResponse struct {

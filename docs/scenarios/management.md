@@ -79,7 +79,7 @@ dtool query --tags 月报,汇报 --notes "口径：含已退款" --sql "SELECT �
     ROUND(SUM(金额),2) AS 销售额 FROM orders GROUP BY 1"
 
 dtool actions list --limit 5          # 最近做了什么，各自产出什么
-dtool actions show <id>               # 完整参数、SQL、产物（预览默认不打印）
+dtool actions show <id>               # 完整参数、SQL、产物（预览默认不打印；strong 下 --full 被拒）
 dtool actions annotate <id> --text "用于 10 月经营会"
 dtool actions trace <id>              # 上游数据 -> 本次查询 -> 派生的图表
 dtool actions export --limit 20 --output 月报留痕.json

@@ -181,6 +181,7 @@ type QueryParams struct {
 	MaxRows             int
 	Timeout             time.Duration
 	Sandbox             bool
+	Extra               map[string]any // 额外写入 Action input 的字段（如 purpose/column）
 }
 
 func (e *Env) lineage(from string) (string, error) {
@@ -222,6 +223,9 @@ func (e *Env) Query(p QueryParams, parentID string) (*types.QueryResult, error) 
 	}
 	cwd, _ := os.Getwd()
 	input := map[string]any{"sql": p.SQL, "sources": recorded, "format": format}
+	for k, v := range p.Extra {
+		input[k] = v
+	}
 	var res *types.QueryResult
 	a, err := e.run("query", input, parentID, derived, func(_ *action.Action, dir string) (*action.Output, error) {
 		r, err := query.Run(e.Ctx, query.Options{SQL: p.SQL, Sources: sources,
