@@ -7,7 +7,7 @@
 dtool convert --input data.xlsx --name sales
 dtool datasets list                 # 查看已有数据集
 dtool datasets show sales           # 位置 + Schema（类型/可空/唯一/基数/角色）
-dtool datasets create sales2 --result latest:query   # 结果集 → 独立数据集（仅 normal）
+dtool datasets create sales2 --result latest:query   # 结果集 → 独立数据集
 dtool query --sql 'SELECT region, SUM(amount) FROM sales GROUP BY region'   # 默认只返回交付清单
 
 # 需要自己看结果/枚举值时，只能由用户本人把 config.yaml 改成 privacy: normal
@@ -33,7 +33,7 @@ dtool actions results stat          # 结果集数量/大小/行数/缺失/外�
 
 **默认 `privacy: strong`（强隐私），且只能由用户本人修改配置文件切换，命令行没有开关可覆盖。** 结果类命令的 stdout 只有一个交付清单：`action_id` + `artifacts[]`（`path` / `abs_path` / `mime` / `bytes` / `sha256`）+ `send`（怎么发），不包含 `columns`、`rows`、`row_count`、`preview`。用 `dtool deliver <action_id>` 可随时重新取回同一份清单；把 `abs_path` 作为附件发给用户即可，不需要读取内容。
 
-强隐私下这些“读具体值”的路径会直接拒绝（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`datasets create`、`actions show --full`、`actions output`。
+强隐私下这些“读具体值”的路径会直接拒绝（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`actions show --full`、`actions output`。
 
 结果集管理不受影响：`dtool actions results list|stat|verify|gc` 只处理 `output.files` 的路径/大小/行数/哈希等元数据，`gc` 也只删除工作区 `outputs/` 下的文件。
 

@@ -125,12 +125,9 @@ func newDatasetsCmd() *cobra.Command {
 
 	var resultRef string
 	create := &cobra.Command{
-		Use: "create <name> --result <ref>", Short: "数据动作：把 query 结果集提升为独立数据集", Args: cobra.ExactArgs(1),
+		Use: "create <name> --result <ref>", Short: "把 query 结果集提升为独立数据集", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := requireFlags(c, "result"); err != nil {
-				return err
-			}
-			if err := forbidStrong("从结果集生成数据集"); err != nil {
 				return err
 			}
 			env, err := newEnv(c.Context())
@@ -140,6 +137,13 @@ func newDatasetsCmd() *cobra.Command {
 			res, err := env.DatasetFromResult(pipeline.DatasetFromResultParams{Name: args[0], From: resultRef}, "")
 			if err != nil {
 				return err
+			}
+			if strongPrivacy() {
+				// 数据只在本地流转；stdout 仍只给 data/schema 文件位置，不暴露行/列/样例。
+				var items []artifactItem
+				addArtifact(&items, "data", res.DataFile)
+				addArtifact(&items, "schema", res.SchemaFile)
+				return printDelivery(c, res.ActionID, items...)
 			}
 			return printJSON(c.OutOrStdout(), res)
 		},

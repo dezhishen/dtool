@@ -54,8 +54,20 @@ func TestDatasetsCreateFromResult(t *testing.T) {
 		t.Fatal("latest_copy schema missing")
 	}
 
-	// 强隐私下这是读具体值的数据动作
-	if got, err := runRaw(t, "datasets", "create", "blocked", "--result", "action:"+sourceID); err == nil || got["code"].(float64) != 6 {
-		t.Fatalf("strong privacy should block create: %v %v", got, err)
+	// 强隐私下仍然允许：数据只在本地流转，stdout 只给 data/schema 文件位置
+	got, err = runRaw(t, "datasets", "create", "strong_copy", "--result", "action:"+sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"record_count", "columns"} {
+		if _, ok := got[k]; ok {
+			t.Fatalf("强隐私 create 不应输出 %q: %v", k, got)
+		}
+	}
+	if arts := got["artifacts"].([]any); len(arts) != 2 {
+		t.Fatalf("strong create artifacts: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".dtool", "datasets", "strong_copy", "data.json")); err != nil {
+		t.Fatal("strong_copy data missing")
 	}
 }
