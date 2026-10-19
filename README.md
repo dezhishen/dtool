@@ -25,6 +25,7 @@ dtool pipeline --excel data.xlsx --sql 'SELECT region, SUM(amount) AS total FROM
 dtool visualize --input latest:query --type bar --x region --y total --group-by quarter# 宽表直取：每个 --y 列一个系列
 dtool visualize --input latest:query --type line --x month --y sales,profit
 dtool actions list --limit 5
+dtool actions results stat          # 结果集数量/大小/行数/缺失/外部文件
 ```
 
 导出：`query --format csv|markdown|table|json|xlsx --output <文件>`（xlsx 需 `--output`）；`visualize --type bar|line|pie --format png|svg` 出图（`--group-by <字段>` 长表透视，`--y a,b` 宽表多列；bar 为分组柱、line 为多条折线；`--missing zero|gap` 控制缺失组合补 0 / 断线）；`visualize --type table --format md|xlsx` 导出表格。
@@ -32,6 +33,8 @@ dtool actions list --limit 5
 **默认 `privacy: strong`（强隐私），且只能由用户本人修改配置文件切换，命令行没有开关可覆盖。** 结果类命令的 stdout 只有一个交付清单：`action_id` + `artifacts[]`（`path` / `abs_path` / `mime` / `bytes` / `sha256`）+ `send`（怎么发），不包含 `columns`、`rows`、`row_count`、`preview`。用 `dtool deliver <action_id>` 可随时重新取回同一份清单；把 `abs_path` 作为附件发给用户即可，不需要读取内容。
 
 强隐私下这些“读具体值”的路径会直接拒绝（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`actions show --full`、`actions output`。
+
+结果集管理不受影响：`dtool actions results list|stat|verify|gc` 只处理 `output.files` 的路径/大小/行数/哈希等元数据，`gc` 也只删除工作区 `outputs/` 下的文件。
 
 `datasets show` 仍可查看结构，但只有 `type` / `sql_type` / `nullable` / `unique` / `distinct_count` / `role`，**不含 `enum`、`samples`、`min`/`max`**。需要枚举值时，在 `privacy: normal` 下执行一次显式数据动作：`dtool datasets values <name> --column <col> [--limit 20]`（会记录为一条 `query` Action）。
 

@@ -56,6 +56,7 @@ dtool version                                        # 确认可用（含 versio
 - **Agent 不得修改配置文件里的 `privacy`，也不得新建/改写配置后通过 `-c` 传入，或用参数绕过**。它只能由用户本人显式改；没有命令行开关、不读环境变量。`-c` 指向的配置应视为用户输入。
 - 强隐私下以下动作直接失败（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`actions show --full`、`actions output`。
 - 结构类命令仍可用：`datasets show` 只给 `type`/`nullable`/`unique`/`distinct_count`/`role`，不含 `enum`/`samples`/`min`/`max`；需要枚举值必须等用户把配置改成 `normal` 后再执行 `datasets values`。
+- 结果集管理（`actions results list|stat|verify|gc`）只输出元数据或删除文件，strong 下可用；`gc` 默认 dry-run，只有 `--apply` 才删除。
 - 交付方式：把 `artifacts[].abs_path` 作为文件附件发给用户，不读取、不复述内容；`dtool deliver <action_id>` 可随时重新取清单。dtool 不能阻止调用方直接读文件，**强隐私是契约，不是沙箱**：不要主动去读产物文件。
 
 ## 标准流程
@@ -95,6 +96,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y[,Y2...] [--group-by G] [--missing zero\|gap] [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y，且忽略多系列参数；y 必须是数值列；`--group-by`（长表透视）与多 `--y`（宽表直取）互斥，均仅 bar/line，不能与 x/y 同列；缺失组合默认补 0，`--missing gap`（仅 line）改为断线；重复 (x, group) 报错 |
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...] [--rows]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据；默认只返回交付清单，`--rows` 仅 normal 可用 |
 | `actions list [--limit N --type T --status S]` | 最新在前；状态含 `stale`（进程已死的 running，会在 ~0.25s 内被看护进程落盘收敛，见下） |
+| `actions results list\|stat\|verify\|gc` | 结果集管理（只处理 `output.files` 元数据）：`list` 枚举、`stat` 统计、`verify` 校验存在/哈希、`gc` 默认 dry-run（`--apply` 才删除；只动工作区 `outputs/`，外部输出/被引用结果/`--keep-last` 受保护） |
 | `actions show <id> [--full] \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `show` 默认不输出 `output.preview`；`--full` / `output` **仅 normal 可用**（strong 下 code 6）；`export` 在 strong 下自动剥掉 preview；`annotate` 写用户口径/备注；`sync` 收敛状态 |
 | `deliver <id>` | 只返回产物清单（`path`/`abs_path`/`mime`/`bytes`/`sha256` + `send` 提示），不读内容；strong 下也可用 |
 | `--store auto\|memory\|disk` | SQLite 库落在哪：auto（按预算选档）/ memory（快）/ disk（峰值最低） |

@@ -44,30 +44,9 @@ func artifactOf(role, path string) (types.Artifact, error) {
 		return types.Artifact{}, types.Errorf(types.CodeGeneral, "read artifact %s: %v", path, err)
 	}
 	return types.Artifact{
-		Role: role, Path: path, AbsPath: abs, MIME: mimeOf(path),
+		Role: role, Path: path, AbsPath: abs, MIME: types.MimeOf(path),
 		Bytes: n, SHA256: hex.EncodeToString(h.Sum(nil)),
 	}, nil
-}
-
-func mimeOf(path string) string {
-	switch filepath.Ext(path) {
-	case ".json":
-		return "application/json"
-	case ".csv":
-		return "text/csv"
-	case ".md":
-		return "text/markdown"
-	case ".xlsx":
-		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-	case ".png":
-		return "image/png"
-	case ".svg":
-		return "image/svg+xml"
-	case ".txt":
-		return "text/plain"
-	default:
-		return "application/octet-stream"
-	}
 }
 
 // deliveryOf 只读取文件元信息，不把内容写进 stdout。

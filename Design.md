@@ -234,6 +234,7 @@ AI 只负责把文件发给用户，不需要也不应该读内容。`dtool deli
 | `datasets values` | 拒绝（code 6） | 显式数据动作，返回去重值 |
 | `actions show --full` / `actions output` | 拒绝（code 6） | 允许 |
 | `actions export` | 允许，但导出文件剥掉 `output.preview` | 允许完整导出 |
+| `actions results list\|stat\|verify\|gc` | 允许（元数据/删除） | 允许 |
 | `deliver` | 允许（只给清单） | 允许 |
 
 **结构展示不含原始取值**：`ColumnSchema` 只有 `name` / `type` / `sql_type` / `nullable` / `unique` / `distinct_count` / `distinct_count_truncated` / `role` / `format`。`enum`、`samples`、`min`、`max` 不再生成，也不再出现在 `datasets show` 的输出里；需要枚举值时执行独立的 `datasets values`（见 5.5）。
@@ -559,7 +560,25 @@ dtool actions sync
 
 # 导出所有 Action 为单个 JSON（供 AI 一次性读取；支持 --limit / --since 控制体积）
 dtool actions export --output .dtool/actions_dump.json
+
+# 结果集管理：枚举 Action 的 output.files（默认 query + visualize）
+dtool actions results list
+dtool actions results stat
+dtool actions results verify
+dtool actions results gc --older-than 30d --keep-last 5       # dry-run
+dtool actions results gc --older-than 30d --keep-last 5 --apply
 ```
+
+**`actions results`** 只管理 Action 的结果产物，不管理 `datasets/`（convert 的数据集仍由 `datasets` 命令负责）：
+
+| 子命令 | 说明 |
+|--------|------|
+| `list` | 按 Action 的 `output.files` 枚举结果集；默认 `--type query\|visualize\|all`，可看 `row_count`/`columns`/`bytes`/`exists`/`external`；`--hash` 同时算 sha256 |
+| `stat` | 聚合数量、总大小、总行数、缺失文件、外部文件，按类型/年龄分桶 |
+| `verify` | 检查文件存在、可读并计算 sha256；只报告事实，不打印内容 |
+| `gc` | 默认 dry-run；`--apply` 才删除。只动工作区 `outputs/`，不动外部 `--output`、数据集、被其他 Action 引用或 `--keep-last` 保护的结果；`--force` 才忽略引用保护 |
+
+`gc` 的 `--older-than` 支持 `30d` / `24h` / `0`，默认 `30d`；`--keep-last` 默认 5（每种结果类型保留最近 N 个）。强隐私下 `list/stat/verify/gc` 都可用，因为它们只处理元数据或删除文件，不输出内容。
 
 **`actions list` 的 stdout（JSON 格式）**：
 

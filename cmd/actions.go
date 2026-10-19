@@ -208,6 +208,6 @@ func newActionsCmd() *cobra.Command {
 		},
 	}
 
-	c.AddCommand(list, show, output, trace, annotate, export, reindex, sync)
+	c.AddCommand(list, show, output, trace, annotate, export, reindex, sync, newResultsCmd())
 	return c
 }

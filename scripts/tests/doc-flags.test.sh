@@ -24,18 +24,19 @@ fail=0
 
 go build -o "$tmp/dtool" . >/dev/null
 
-# 1) 收集 CLI 的全部开关：根命令 + 每个子命令 + 子命令的子命令（递归两层，够用）
-{
-  "$tmp/dtool" --help 2>&1 || true
-  for c in $("$tmp/dtool" --help 2>&1 | awk '/^Available Commands:/,/^$/ {print $1}' |
-    grep -vE '^(Available|Commands:|completion|help)$'); do
-    "$tmp/dtool" "$c" --help 2>&1 || true
-    for s in $("$tmp/dtool" "$c" --help 2>&1 | awk '/^Available Commands:/,/^$/ {print $1}' |
-      grep -vE '^(Available|Commands:)$'); do
-      "$tmp/dtool" "$c" "$s" --help 2>&1 || true
-    done
+# 1) 收集 CLI 的全部开关：递归遍历所有层级的子命令
+collect_help() {
+  local -a cmd=("$@")
+  "$tmp/dtool" "${cmd[@]}" --help 2>&1 || true
+  local sub
+  sub=$("$tmp/dtool" "${cmd[@]}" --help 2>&1 | awk '/^Available Commands:/,/^$/ {print $1}' |
+    grep -vE '^(Available|Commands:|completion|help)$' || true)
+  local s
+  for s in $sub; do
+    collect_help "${cmd[@]}" "$s"
   done
-} | grep -ohE -- '--[a-z][a-z0-9-]*' | sort -u >"$tmp/cli.txt"
+}
+collect_help | grep -ohE -- '--[a-z][a-z0-9-]*' | sort -u >"$tmp/cli.txt"
 
 # 2) 收集文档里出现的开关（README / skills / Design / docs / examples）
 grep -rohE -- '--[a-z][a-z0-9-]*' README.md Design.md docs examples skills 2>/dev/null |

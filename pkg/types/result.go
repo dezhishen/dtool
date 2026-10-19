@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 )
 
@@ -149,6 +150,28 @@ type Artifact struct {
 type SendHint struct {
 	Mode string `json:"mode"` // attachment
 	Hint string `json:"hint"`
+}
+
+// MimeOf 按扩展名返回常见产物的 MIME；未知类型回退为二进制流。
+func MimeOf(path string) string {
+	switch filepath.Ext(path) {
+	case ".json":
+		return "application/json"
+	case ".csv":
+		return "text/csv"
+	case ".md":
+		return "text/markdown"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".png":
+		return "image/png"
+	case ".svg":
+		return "image/svg+xml"
+	case ".txt":
+		return "text/plain"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // Delivery 是强隐私模式的 stdout 契约：结果在哪、怎么发。
