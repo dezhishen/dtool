@@ -232,6 +232,7 @@ AI 只负责把文件发给用户，不需要也不应该读内容。`dtool deli
 | `query --format csv\|markdown\|table` 无 `--output` | 拒绝（code 6） | 直接打印表格 |
 | `datasets show` | 结构（无任何原值） | 结构（无任何原值） |
 | `datasets values` | 拒绝（code 6） | 显式数据动作，返回去重值 |
+| `datasets create` | 拒绝（code 6） | 从 query 结果集生成命名数据集 |
 | `actions show --full` / `actions output` | 拒绝（code 6） | 允许 |
 | `actions export` | 允许，但导出文件剥掉 `output.preview` | 允许完整导出 |
 | `actions results list\|stat\|verify\|gc` | 允许（元数据/删除） | 允许 |
@@ -513,11 +514,16 @@ dtool datasets show sales
 # 显式数据动作：读取某列的去重取值（仅 normal；strong 下 code 6）
 dtool datasets values sales --column region --limit 20 --output values.json
 
+# 结果集 → 独立数据集（仅 normal；strong 下 code 6）
+dtool datasets create monthly --result action:<query-id>
+
 # 只看位置与发送方式（strong 也可用）
 dtool deliver <action_id>
 ```
 
 `datasets values` 内部执行 `SELECT DISTINCT ... LIMIT N`，记录为一条 `query` Action（`input.purpose = distinct_values`，同时记录 `dataset` / `column` / `limit`），结果落盘。默认最多返回 20 个值，超过时 `truncated: true`。
+
+`datasets create <name> --result <ref>` 把一次 `query` 的结果集提升为独立数据集：从结果行推断 Schema，写 `data.json` + `data.schema.json` + `dataset.json`，并记录一条 `convert` Action（`derived_from` 指向源 query）。`<ref>` 支持 `action:<id>` / `latest:query`；只接受 `query` 类型结果，`convert` 的数据集仍由 `datasets` 自身管理。
 
 `deliver` 返回 `artifacts[]`（`path` / `abs_path` / `mime` / `bytes` / `sha256`）与 `send` 提示，不读文件内容；它不产生新 Action。
 

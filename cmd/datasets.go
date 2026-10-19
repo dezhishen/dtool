@@ -123,6 +123,29 @@ func newDatasetsCmd() *cobra.Command {
 	values.Flags().IntVar(&limit, "limit", 20, "最多返回多少个去重值")
 	values.Flags().StringVar(&output, "output", "", "同时写一份 JSON 结果到该文件")
 
+	var resultRef string
+	create := &cobra.Command{
+		Use: "create <name> --result <ref>", Short: "数据动作：把 query 结果集提升为独立数据集", Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if err := requireFlags(c, "result"); err != nil {
+				return err
+			}
+			if err := forbidStrong("从结果集生成数据集"); err != nil {
+				return err
+			}
+			env, err := newEnv(c.Context())
+			if err != nil {
+				return err
+			}
+			res, err := env.DatasetFromResult(pipeline.DatasetFromResultParams{Name: args[0], From: resultRef}, "")
+			if err != nil {
+				return err
+			}
+			return printJSON(c.OutOrStdout(), res)
+		},
+	}
+	create.Flags().StringVar(&resultRef, "result", "", "结果集引用：action:<id> / latest:query")
+
 	del := &cobra.Command{
 		Use: "delete <name>", Short: "删除数据集（已有 Action 记录保留，但不再能引用它）", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
@@ -137,6 +160,6 @@ func newDatasetsCmd() *cobra.Command {
 		},
 	}
 
-	c.AddCommand(list, show, values, del)
+	c.AddCommand(list, show, values, create, del)
 	return c
 }

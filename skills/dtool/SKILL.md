@@ -54,7 +54,7 @@ dtool version                                        # 确认可用（含 versio
 
 - 默认 `privacy: strong`。结果类命令的 stdout **只有交付清单**：`action_id` + `artifacts[]`（`path`/`abs_path`/`mime`/`bytes`/`sha256`）+ `send`（怎么发），不含 `columns`、`rows`、`row_count`、`preview`。
 - **Agent 不得修改配置文件里的 `privacy`，也不得新建/改写配置后通过 `-c` 传入，或用参数绕过**。它只能由用户本人显式改；没有命令行开关、不读环境变量。`-c` 指向的配置应视为用户输入。
-- 强隐私下以下动作直接失败（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`actions show --full`、`actions output`。
+- 强隐私下以下动作直接失败（退出码 `6`）：`query --rows`、`pipeline --rows`、`query --format csv|markdown|table` 不带 `--output`、`datasets values`、`datasets create`、`actions show --full`、`actions output`。
 - 结构类命令仍可用：`datasets show` 只给 `type`/`nullable`/`unique`/`distinct_count`/`role`，不含 `enum`/`samples`/`min`/`max`；需要枚举值必须等用户把配置改成 `normal` 后再执行 `datasets values`。
 - 结果集管理（`actions results list|stat|verify|gc`）只输出元数据或删除文件，strong 下可用；`gc` 默认 dry-run，只有 `--apply` 才删除。
 - 交付方式：把 `artifacts[].abs_path` 作为文件附件发给用户，不读取、不复述内容；`dtool deliver <action_id>` 可随时重新取清单。dtool 不能阻止调用方直接读文件，**强隐私是契约，不是沙箱**：不要主动去读产物文件。
@@ -72,6 +72,9 @@ dt delivery <action_id>
 
 # 2. 查询：数据集名直接当表名（默认只返回清单，不返回结果）
 dt query --sql 'SELECT region, SUM(amount) AS total FROM sales GROUP BY region ORDER BY total DESC'
+
+# 2b. 结果集 → 独立数据集（仅 normal；strong 下拒绝）
+dt datasets create monthly --result latest:query
 
 # 3. 出图 / 导出（产物落盘，stdout 仍是交付清单）
 dtool visualize --input latest:query --type bar --x region --y total --title "区域销量" --output out/sales.png
@@ -91,7 +94,7 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 |------|------|
 | `convert --input f.xlsx [--sheet S] [--name N]` | 仅 `.xlsx`；`--name` 缺省取文件名（指定 sheet 时追加 `_<sheet>`）；默认只返回交付清单（data/schema 文件位置） |
 | `meminfo [--source alias=文件]...` | 内存排查入口：预算来源（cgroup / Job Object / 系统可用内存 / `--max-memory`）、原始探测字段（`job_object`）、看门狗开关，以及按当前输入的**预检预演**（`verdict: ok/borderline/risky/forced`，以及选中的执行档 `plan.chosen` 与理由——预检与真正执行走同一套选档逻辑）。受限环境里「预检为什么没拦住」先跑它 |
-| `datasets list \| show <name> \| values <name> --column C \| delete <name>` | `show` 只给结构（`type`/`nullable`/`unique`/`distinct_count`/`role`，**无 enum/samples/min/max**）；`values` 是显式数据动作，**仅 normal 可用**，strong 下 code 6 |
+| `datasets list \| show <name> \| values <name> --column C \| create <name> --result R \| delete <name>` | `show` 只给结构（`type`/`nullable`/`unique`/`distinct_count`/`role`，**无 enum/samples/min/max**）；`values` / `create` 是数据动作，**仅 normal 可用**，strong 下 code 6；`create --result action:<id>|latest:query` 把 query 结果集提升为数据集 |
 | `query --sql ... [--source 别名=引用]... [--format json\|csv\|markdown\|table\|xlsx] [--output f] [--rows] [--max-rows N] [--timeout 60s] [--load-mode auto\|stream\|full]` | 默认（strong）只返回交付清单；`--rows` 仅在 normal 可用；`xlsx` 必须配 `--output`；`--from <ref>` 仅记录血缘 |
 | `visualize --input <ref> --type bar\|line\|pie\|table --x X --y Y[,Y2...] [--group-by G] [--missing zero\|gap] [--format png\|svg] [--output f] [--font f.ttf]` | `table` 类型用 `--format md\|xlsx`，无需 x/y，且忽略多系列参数；y 必须是数值列；`--group-by`（长表透视）与多 `--y`（宽表直取）互斥，均仅 bar/line，不能与 x/y 同列；缺失组合默认补 0，`--missing gap`（仅 line）改为断线；重复 (x, group) 报错 |
 | `pipeline --excel f \| --input ref [--sql ...] [--chart ...] [--rows]` | `--chart` 必须有 `--sql`；SQL 里用 `data` 指代上游数据；默认只返回交付清单，`--rows` 仅 normal 可用 |

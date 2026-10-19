@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/dezhishen/dtool/pkg/types"
 )
 
 func TestDetectType(t *testing.T) {
@@ -43,5 +45,22 @@ func TestInferSchemaStructure(t *testing.T) {
 	raw, _ := json.Marshal(s[1])
 	if strings.Contains(string(raw), `"N"`) || strings.Contains(string(raw), `"enum"`) || strings.Contains(string(raw), `"samples"`) {
 		t.Fatalf("schema 不应含原始取值: %s", raw)
+	}
+}
+
+func TestInferSchemaFromRows(t *testing.T) {
+	rows := []types.Row{
+		{Columns: []string{"id", "region", "amount"}, Values: []any{json.Number("1"), "N", json.Number("1.5")}},
+		{Columns: []string{"id", "region", "amount"}, Values: []any{json.Number("2"), "S", json.Number("2")}},
+	}
+	headers, schema, norm := InferSchemaFromRows(rows)
+	if len(headers) != 3 || headers[0] != "id" || len(norm) != 2 || len(norm[0].Values) != 3 {
+		t.Fatalf("headers=%v norm=%+v", headers, norm)
+	}
+	if schema[0].Type != "integer" || schema[1].Type != "string" || schema[2].Type != "number" {
+		t.Fatalf("schema=%+v", schema)
+	}
+	if norm[0].Values[1] != "N" {
+		t.Fatalf("normalized row=%+v", norm[0])
 	}
 }

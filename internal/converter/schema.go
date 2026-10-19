@@ -1,10 +1,13 @@
 package converter
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dezhishen/dtool/pkg/types"
 )
 
 // ColumnSchema 只描述结构，不包含任何原始取值（枚举/样例/极值都不在这里）。
@@ -193,6 +196,48 @@ func convertCell(typ, s string) any {
 		}
 	}
 	return s
+}
+
+// InferSchemaFromRows 从结果集的类型化行推断 Schema，并规整为统一列顺序。
+// 结果集可能来自 query（JSON 行），这里复用同一套整列类型推断规则。
+func InferSchemaFromRows(rows []types.Row) ([]string, []ColumnSchema, []types.Row) {
+	seen := map[string]bool{}
+	var headers []string
+	for _, r := range rows {
+		for _, c := range r.Columns {
+			if !seen[c] {
+				seen[c] = true
+				headers = append(headers, c)
+			}
+		}
+	}
+	data := make([][]string, len(headers))
+	norm := make([]types.Row, len(rows))
+	for i, r := range rows {
+		vals := make([]any, len(headers))
+		for j, h := range headers {
+			if v, ok := r.Get(h); ok {
+				vals[j] = v
+				data[j] = append(data[j], valueString(v))
+			} else {
+				data[j] = append(data[j], "")
+			}
+		}
+		norm[i] = types.Row{Columns: headers, Values: vals}
+	}
+	return headers, InferSchema(headers, data, len(rows)), norm
+}
+
+func valueString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch x := v.(type) {
+	case string:
+		return x
+	default:
+		return fmt.Sprint(x)
+	}
 }
 
 // detectType 仅基于整列非空值判断类型；保留它是为了单测能直接断言类型规则。

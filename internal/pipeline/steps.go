@@ -174,6 +174,112 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 	return res, nil
 }
 
+type DatasetFromResultParams struct {
+	Name string // 新数据集名
+	From string // 结果集引用：action:<id> / latest:query
+}
+
+// DatasetFromResult 把一次 query 的结果集提升为独立数据集（data.json + Schema），
+// 并把这次提升记录成一条 convert Action，derived_from 指向源 query Action。
+func (e *Env) DatasetFromResult(p DatasetFromResultParams, parentID string) (*types.ConvertResult, error) {
+	if p.Name == "" {
+		return nil, types.Errorf(types.CodeUsage, "missing dataset name")
+	}
+	if p.From == "" {
+		return nil, types.Errorf(types.CodeUsage, "missing --from（结果集引用）")
+	}
+	name := workspace.SafeName(p.Name)
+	r, err := e.Rec.Resolve(p.From)
+	if err != nil {
+		return nil, err
+	}
+	if r.ActionID == "" {
+		return nil, types.Errorf(types.CodeUsage, "--from 必须是结果集引用（action:<id> / latest:query）")
+	}
+	src, err := e.Rec.Get(r.ActionID)
+	if err != nil {
+		return nil, err
+	}
+	if src.Type != "query" {
+		return nil, types.Errorf(types.CodeUsage, "只能从 query 结果集生成数据集，当前 Action 类型是 %s", src.Type).
+			WithHint("先用 dtool query 产出结果集，再执行 datasets create")
+	}
+	if src.Output == nil || len(src.Output.Files) == 0 {
+		return nil, types.Errorf(types.CodeNotFound, "源 Action %s 没有结果文件", src.ID)
+	}
+
+	cols, rows, err := visualize.LoadRows(r.Path)
+	if err != nil {
+		return nil, err
+	}
+	var headers []string
+	var schema []converter.ColumnSchema
+	var norm []types.Row
+	if len(rows) > 0 {
+		headers, schema, norm = converter.InferSchemaFromRows(rows)
+	} else {
+		// 空结果集仍可用 Action 记录的列名建立空数据集。
+		headers = cols
+		if len(headers) == 0 {
+			headers = src.Output.Columns
+		}
+		data := make([][]string, len(headers))
+		schema = converter.InferSchema(headers, data, 0)
+		norm = []types.Row{}
+	}
+	if len(headers) == 0 {
+		return nil, types.Errorf(types.CodeExec, "结果集没有列，无法生成数据集")
+	}
+
+	input := map[string]any{"from": p.From, "name": name, "source_action": src.ID, "purpose": "dataset_from_result"}
+	var res *types.ConvertResult
+	a, err := e.run("convert", input, parentID, src.ID, func(a *action.Action, _ string) (*action.Output, error) {
+		ds := &dataset.Store{WS: e.WS}
+		stage, err := ds.NewStaging()
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(stage)
+		now := time.Now().UTC().Truncate(time.Second)
+		if err := workspace.WriteJSONAtomic(filepath.Join(stage, dataset.DataFile), norm); err != nil {
+			return nil, err
+		}
+		doc := map[string]any{
+			"source":       "action:" + src.ID,
+			"sheet":        "",
+			"record_count": len(norm),
+			"updated_at":   now.Format(time.RFC3339),
+			"columns":      schema,
+		}
+		if err := workspace.WriteJSONAtomic(filepath.Join(stage, dataset.SchemaFile), doc); err != nil {
+			return nil, err
+		}
+		m, err := ds.Commit(stage, dataset.Meta{Name: name, ActionID: a.ID,
+			Source: "action:" + src.ID, UpdatedAt: now, RecordCount: len(norm), Columns: headers})
+		if err != nil {
+			return nil, err
+		}
+		info, err := ds.Info(name)
+		if err != nil {
+			return nil, err
+		}
+		prev, trunc := action.Preview(norm, e.Preview)
+		res = &types.ConvertResult{Success: true, Name: name, UpdatedAt: m.UpdatedAt,
+			DataFile: info.DataFile, SchemaFile: info.SchemaFile, RecordCount: len(norm), Columns: headers}
+		return &action.Output{
+			Files: []string{info.DataFile, info.SchemaFile}, RowCount: len(norm), Columns: headers,
+			SchemaRef: info.SchemaFile, Preview: prev, PreviewTruncated: trunc,
+			Summary: fmt.Sprintf("从结果集 %s 生成数据集 %s（%d 行）", src.ID, name, len(norm)),
+			Details: map[string]any{"dataset": name, "source_action": src.ID},
+		}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	res.ActionID = a.ID
+	return res, nil
+}
+
 type QueryParams struct {
 	SQL, Format, Output string
 	Sources             map[string]string // 别名 -> 引用（文件 / action:<id> / latest:<type>）
