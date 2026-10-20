@@ -40,6 +40,27 @@ trap 'rm -rf "$stage"' EXIT
 GOOS="$os" GOARCH="$arch" CGO_ENABLED=1 \
   bash scripts/gen-notices.sh "$stage/THIRD_PARTY_NOTICES.md"
 
+# zip_dir 打包目录内容（与 `cd dir && zip ./*` 等价）。
+# Git Bash 不自带 zip：Windows 上退回 PowerShell 7 的 Compress-Archive（.NET 写入
+# 标准的 "/" 分隔符；Windows PowerShell 5.1 会写 "\\"，换来跨平台解包问题）。
+zip_dir() { # zip_dir <srcdir> <out.zip>
+  local src="$1" out="$2"
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$src" && zip -q "$OLDPWD/${out}" ./*)
+    return
+  fi
+  if command -v pwsh.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+    local src_win out_win
+    src_win="$(cygpath -w "$src")"
+    out_win="$(cygpath -w "$PWD/${out}")"
+    pwsh.exe -NoProfile -Command \
+      "Compress-Archive -Path '${src_win}\\*' -DestinationPath '${out_win}' -Force"
+    return
+  fi
+  echo "没有 zip 命令，也没有可用的 PowerShell（无法生成 ${out}）" >&2
+  return 1
+}
+
 build() { # build [额外 ldflags]
   # shellcheck disable=SC2086
   CGO_ENABLED=1 GOOS="$os" GOARCH="$arch" \
@@ -62,7 +83,7 @@ fi
 cp README.md LICENSE "${stage}/"
 cp skills/dtool/SKILL.md "${stage}/SKILL.md"
 if [[ "$os" == windows ]]; then
-  (cd "$stage" && zip -q "$OLDPWD/dist/${name}.zip" ./*)
+  zip_dir "$stage" "dist/${name}.zip"
 else
   tar -C "$stage" -czf "dist/${name}.tar.gz" .
 fi

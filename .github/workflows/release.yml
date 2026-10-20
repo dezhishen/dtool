@@ -96,12 +96,19 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Windows：把 MSYS2 gcc 加进 PATH
+      - name: Windows：准备 MSYS2 UCRT64 gcc
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: Windows：把 UCRT64 gcc 加进 PATH
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $gcc = "C:\msys64\ucrt64\bin"
-          if (-not (Test-Path "$gcc\gcc.exe")) { throw "未找到 $gcc\gcc.exe" }
+          $gcc = Join-Path "${{ steps.msys2.outputs.msys2-location }}" "ucrt64\bin"
+          if (-not (Test-Path "$gcc\gcc.exe")) { throw "未找到 $gcc\gcc.exe（MSYS2 UCRT64 gcc 未安装成功）" }
           $gcc | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: 构建并打包 ${{ matrix.target }}
