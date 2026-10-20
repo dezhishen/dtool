@@ -78,6 +78,13 @@ else
   build
 fi
 
+# 冒烟：目标平台与当前平台一致时，启动一次产物。Windows 上这会暴露缺失的运行时
+# DLL（例如静态链接失败回退成动态链接时），避免把跑不起来的包发出去。
+if [[ "$(go env GOOS)/$(go env GOARCH)" == "$target" ]]; then
+  "${stage}/${bin}" version >/dev/null
+  echo "smoke ok: ${target}"
+fi
+
 # 手册的源是标准 Agent Skill 包（skills/<name>/SKILL.md），归档里也按这个名字
 # 放：这样解包后既能直接读，也能整份丢进平台的技能目录（<平台目录>/dtool/SKILL.md）。
 cp README.md LICENSE "${stage}/"

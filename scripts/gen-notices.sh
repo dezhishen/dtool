@@ -9,10 +9,12 @@ cd "$(dirname "$0")/.."
 export CGO_ENABLED="${CGO_ENABLED:-1}"
 out="${1:-THIRD_PARTY_NOTICES.md}"
 
+# Windows 上 go list 的 .Dir 是 `C:\\...\\`，Git Bash 的 find 需要 `C:/...`，
+# 统一成正斜杠（Linux 上是 no-op）。
 mods="$(
   go list -deps \
     -f '{{with .Module}}{{if not .Main}}{{.Path}}|{{.Version}}|{{.Dir}}{{end}}{{end}}' . |
-    sort -u
+    tr '\\' '/' | sort -u
 )"
 
 {
