@@ -269,8 +269,16 @@ AI 只负责把文件发给用户，不需要也不应该读内容。`dtool deli
 | `actions export` | 允许，但导出文件剥掉 `output.preview` | 允许完整导出 |
 | `actions results list\|stat\|verify\|gc` | 允许（元数据/删除） | 允许 |
 | `deliver` | 允许（只给清单） | 允许 |
+| `convert --inspect` | 允许：只输出结构（表头行、列名、类型、计数） | 同左 |
+| `convert --rehearse` | 允许：候选方案只带**结构**（"第 2 行当表头、7 列、样本 4 行"） | 额外带候选行前几个单元格原文（`IncludeSamples`） |
 
-**结构展示不含原始取值**：`ColumnSchema` 只有 `name` / `type` / `sql_type` / `nullable` / `unique` / `distinct_count` / `distinct_count_truncated` / `role` / `format`。`enum`、`samples`、`min`、`max` 不再生成，也不再出现在 `datasets show` 的输出里；需要枚举值时执行独立的 `datasets values`（见 5.5）。
+**探测输出与取值隔离**：`--inspect` / `--rehearse` 是**只读结构探测**，不是数据动作——
+它们能输出表名、表头行号、列名、类型、各类取值命中数与候选方案，但不输出单元格内容。
+唯一的例外是预演练的「候选表头行长什么样」：表头行猜错时，那一行的前几个单元格其实是**数据值**，
+因此默认（强隐私）只报「第 N 行当表头、K 列」，只有配置为 `privacy: normal` 时才把原文带进标签
+（`Options.IncludeSamples`，由 CLI 按隐私模式设置；转换器本身不做隐私判断）。
+
+**结构展示不含原始取值**：`ColumnSchema` 只有 `name` / `type` / `sql_type` / `nullable` / `unique` / `distinct_count` / `distinct_count_truncated` / `role` / `format` / `candidates` / `source`。`enum`、`samples`、`min`、`max` 不再生成，也不再出现在 `datasets show` 的输出里；需要枚举值时执行独立的 `datasets values`（见 5.5）。
 
 Action 文件仍可保存 `output.preview`（仅用于本机排查，`--preview-rows` 控制行数），但 `actions show` 默认不打印，强隐私下 `--full` 也被拒绝。注意 dtool 只能约束自己的命令，不能阻止调用方直接读文件；强隐私是契约层，真正的硬隔离靠工作区权限/容器沙箱。
 
@@ -420,9 +428,13 @@ dtool convert \
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| `--input` | 是 | Excel 文件路径 |
+| `--input` | 是 | 表格文件路径（当前支持 `.xlsx`） |
 | `--sheet` | 否 | 工作表名称，默认第一个 |
 | `--name` | 否 | 数据集名，缺省取文件名；之后用 `dataset:<name>` 或直接在 SQL 中当表名 |
+| `--converter` | 否 | 转换器：`auto`（按扩展名选择，默认）或已注册的名字（当前只有 `xlsx`） |
+| `--inspect` | 否 | 只输出表结构 `Layout`（JSON），不写数据集；可反复执行 |
+| `--rehearse` | 否 | 预演练：把表头行/工作表/列类型展开成候选方案与影响（JSON），不写数据集 |
+| `--layout` | 否 | 使用已确认的表结构文件（JSON），不再自动探测；对不上直接报错 |
 | `--tags` | 否 | Action 标签 |
 
 **输出**：写入数据集 `.dtool/datasets/<name>/data.json`（及 `data.schema.json`、`dataset.json`），同时生成 Action 记录；同名数据集被覆盖并刷新更新日期。Schema 总会生成。
@@ -434,8 +446,52 @@ dtool convert \
 - 短行缺失的单元格填 `null`，而不是省略 key（否则各行字段不一致，SQL 列推断会出错）。
 - 完全空行跳过；合并单元格仅首格有值，其余为 `null`，在 `warnings` 提示。
 - 类型推断**只对整列统一判断**，不逐单元格转换：以 `0` 开头的数字串（如 `00123`、手机号、身份证）、超过 15 位的整数保持 `string`，避免丢前导零/精度。
-- 日期单元格按 Excel 原始序列值转换为 ISO 8601（`2006-01-02` 或带时间），不依赖显示格式。
+- **规则只做排除，不做投票**：任何一行不满足就淘汰该类型，最后取「最具体」的那一个
+  （`string` 被其他类型覆盖，`number` 被 `integer` 覆盖）。过滤后**只剩一个 → 直接定；
+  剩多个 → 它们写进 `columns[].candidates` 并作为 `type_ambiguity` 问题**交给用户/agent 判断。
+  目前规则分不开的典型有两类：0/1 列（`integer` 还是 `boolean`，默认 `integer`，确认后可无损改成 `boolean`，
+  `1/0 ↔ true/false`）；以及样本里混了多种写法的列（默认取**最安全的 `string`** 保留原值，
+  绝不让「多数派」把少数派悄悄改写成 0/null）。
+- **结合 excelize 的单元格数字格式**：`Inspect` 会采样前 20 个数据行的样式，
+  把「Excel 自己声明的格式」记为证据（`excel_date` / `excel_percent` / `excel_currency`）。
+  内置编号见 ECMA-376（14~22、45~47 日期，9/10 百分比，5~8、42~44 货币）。
+  当格式声明与取值形态冲突（如日期格式的列取值像整数）时给出 `date_format` 问题，
+  而不是二选一悄悄猜。
+- 日期布局覆盖 excelize **渲染后**的形态：`2006-01-02`、`2006/01/02`、`2006/1/2`、
+  带时间、RFC3339，以及内置日期格式渲染出的 `01-02-06`（mm-dd-yy）、`1-2-06`、`1/2/06`、
+  `1/2/06 15:04`；整列必须同一种布局，混用则退回 `string`。
 - `--sheet` 不存在时报错并列出可用工作表；仅支持 `.xlsx`。
+
+**结构确认是交互式的，不是一次性的**。真实报表里的多级表头、标题行、合计行、合并单元格、
+「订单号其实是文本」这些问题，靠一次性猜测必然出错，所以把结构提取拆成三步（都只读、可反复）：
+
+```text
+--rehearse ──► 候选方案（表头行 1/2/3、每张工作表、每列的类型候选，各自带打分与影响）
+     │
+     ├──► --inspect ──► Layout（当前方案 + Questions：哪些点需要人定）        ──► 删掉 Questions、
+     │                                                                          写出 layout.json
+     └──► --layout layout.json ──► convert（不再探测，按确认稿执行）
+```
+
+`Layout` 的结构（`internal/converter/converter.go`）：
+
+| 字段 | 含义 |
+|------|------|
+| `format` / `version` | 产出它的转换器与结构版本；版本或格式不符会被拒绝，不静默误读 |
+| `sheet` / `sheets` | 选中的工作表与候选清单（多于一张时会提问） |
+| `header_row` | 表头所在行（1 基）；`0` = 按第一个非空行 |
+| `columns[]` | 每列 `name` / `type` / `source`（`detected`/`confirmed`）/ `confidence` / `evidence` |
+| `questions[]` | 需要人确认的点（`header_row` / `sheet` / `mixed_type` / `total_row` / `merged_cells`） |
+| `warnings[]` | 已自动处理但需要知情的点（空表头改名、合并单元格等） |
+
+关键约定：**带 `--layout` 的转换不再自动探测**。结构对不上（版本、格式、列数、重名列）就直接报错，
+而不是悄悄回退到自动推断——否则「我明明确认过」会变成「怎么又不一样了」。
+`confidence` 与 `evidence`（各类取值命中数，不含原值）让「不确定」可见；隐私强模式下这些结构信息照常输出。
+
+**强制类型必须无损**：`columns[].type` 只能把列改成「整列确实满足」的类型，或改成 `string`。
+把混了 `N/A` 的列硬声明成 `integer` 会被拒绝（code 2，点名是哪一列）——否则那些值解析失败会变成 `0`，
+而「静默把异常值变成 0」比报错严重得多。`string` 是唯一的放宽方向：任何取值都能按文本保存，
+它就是「我不确定，先保留原样」的表达。
 
 stdout 返回结构化结果：
 
@@ -937,12 +993,31 @@ func (r *Recorder) Annotate(id, text, by string) error
 | `dataset:<name>` | 引用数据集（`datasets/<name>/data.json`） |
 | `latest:<type>` | 引用最近一次成功的某类型 Action 输出 |
 
-### 8.3 Excel 转换模块
+### 8.3 转换模块（接口 + 注册表）
+
+转换与查询后端同一套组织方式：`internal/converter` 定义接口，每个格式一个文件、自己注册自己。
+
+```go
+type Converter interface {
+    Name() string
+    Extensions() []string          // 认哪些扩展名（auto 选择与显式校验都用它）
+    Configure(opts map[string]any) error  // 初始化回调；未知键报错
+    Inspect(o Options) (*Layout, error)   // 只读结构：表头行、列类型、待确认问题
+    Rehearse(o Options) (*Rehearsal, error) // 预演练：候选方案 + 打分 + 影响
+    Convert(o Options) (*Result, error)   // 按 Options.Layout（可为 nil）执行转换
+}
+```
+
+- `Register(name, exts, factory)` 在 `init` 里注册；重名、nil 工厂、同一扩展名被两个转换器认领都直接 panic
+  （构建期错误，留到运行时只会表现为「有时选错格式」）。
+- 存工厂不存实例：每次解析新建转换器，`Configure` 只作用于本次执行，两次执行不会串味。
+- `auto` **没有兜底**：只按扩展名挑，认不出来就报错并列出已注册的转换器与扩展名。
+- 当前只注册了 `xlsx`（`internal/converter/xlsx.go`）；CSV 明确不在此列（需求方定：不做 CSV）。
 
 **流式两阶段、单次解析**（峰值内存 ≈ 32MB + 文件 × 3，与行数无关）：
 
 ```go
-func ConvertExcel(o Options) (*Result, error) {
+func (c *xlsxConverter) Convert(o Options) (*Result, error) {
     // 阶段 1：逐行读单元格 → 每列累积统计（colStat）+ 原始值落临时 JSONL
     f, _ := excelize.OpenFile(o.Input)
     it, _ := f.Rows(o.Sheet)          // 迭代器是流式的；GetMergeCells/GetRows 会整表物化

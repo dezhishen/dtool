@@ -194,6 +194,29 @@ dtool query --timeout 10m      --sql '...'    # 查询本身很重时再调大�
 
 预检按「32MB + 文件 × 6」估算（约为实测的 1.7 倍），超出预算时会在转换前拦下并给出数字。上一个版本这里是 ×260：同一个 7.4MB 文件要 1.9GB，17.8MB 的文件在 2GB 上限下直接被 OOM 杀掉。
 
+### 结构是确认出来的，不是猜出来的
+
+真实报表经常有标题行、多级表头、合计行、合并单元格，以及「订单号其实是文本」这类坑。所以 `convert` 把结构提取拆成可反复的
+三步，**前两步都只读、不写数据集**：
+
+```bash
+# 1) 预演练：把每种可能摊开——表头可能是第几行、用哪张表、每列还能是什么类型，
+#    每个候选都带打分（0~1，仅用于排序）与影响（列数/样本行数/列宽是否对齐）
+dtool convert --input data.xlsx --rehearse
+
+# 2) 看结构：当前方案 + 需要你决定的点（questions）与已自动处理的点（warnings）
+dtool convert --input data.xlsx --inspect > layout.json
+#    规则能定的已经定了；只有「过滤后仍剩多个候选」才会出现 columns[].candidates
+#    （例如 0/1 列：integer 还是 boolean、Excel 日期格式与取值冲突）
+#    改 layout.json：header_row、columns[].name / columns[].type（只能无损改或改成 string），删掉 questions
+
+# 3) 按确认稿转换：不再自动探测，结构对不上（版本/格式/列数/重名列）直接报错
+dtool convert --input data.xlsx --layout layout.json --name sales
+```
+
+`--converter` 用于显式指定转换器（默认 `auto` 按扩展名选择；当前只注册了 `xlsx`）。转换器是**接口 + 注册表**结构
+（`internal/converter`），加一种格式只新增一个文件、自己注册自己，不动调用方。
+
 ### 性能测试
 
 **测试环境、方式、全部结果与 1 核 2GB 的能力边界见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)。** 回归用例随 `go test ./...` 一起跑（`-short` 跳过）：

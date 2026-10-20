@@ -20,7 +20,7 @@ bash examples/01-sales-report/run.sh   # 单个示例
 |------|----------|--------|----------|
 | [01-sales-report](01-sales-report/README.md) | 手上有多个工作表的销售工作簿，要出「各区域销售额」的图 + Top 客户 Excel | `sales.xlsx`（订单 120 行、客户 15 行） | 多工作表导入为独立数据集、`datasets show` 看 Schema、数据集名当表名、两个数据集 JOIN、`latest:query` 复用结果出柱状图、`--group-by` 出分组柱 / 多折线、导出 Markdown / Excel |
 | [02-hr-analysis](02-hr-analysis/README.md) | HR 花名册：看部门人力与薪酬、挑出没打绩效的人、导名单 | `hr.xlsx`（员工 60 行） | 前导零工号保持文本、可空列与分类字段结构、饼图、按日期过滤导出 CSV、`IS NULL` 查询并导出 Excel 表格 |
-| [03-messy-data](03-messy-data/README.md) | 同事手工做的脏 Excel：先搞清工具自动改了什么，再洗干净 | `messy.xlsx`（故意的脏数据） | 空表头 / 重复表头 / 空行 / 合并单元格 / 混合类型的自动处理与 `warnings`，`CAST` + `NULLIF` 的处理办法 |
+| [03-messy-data](03-messy-data/README.md) | 同事手工做的脏 Excel：先看清结构、确认类型，再洗干净 | `messy.xlsx`（故意的脏数据） | `--rehearse` 预演练 + `--inspect` 看结构 + `--layout` 按确认稿转换；空表头 / 重复表头 / 空行 / 合并单元格 / 混合类型的 `warnings`，`CAST` + `NULLIF` 的处理办法 |
 | [04-pipeline-actions](04-pipeline-actions/README.md) | 不想一条条敲命令：Excel 直接要图要表，事后还能答出「数字怎么来的」 | `sales.xlsx` | `pipeline` 一条龙出折线图（含 `--group-by` 多系列）、复用已持久化数据集、`annotate` 注释、`--from` 血缘与 `trace`、失败诊断 |
 | [05-multi-series](05-multi-series/README.md) | 同一份数据要「区域 × 月份」和多指标曲线两种对比 | `sales.xlsx` | `--group-by` 长表透视出分组柱、`--missing gap` 折线断点、`--y a,b` 宽表直取出多折线、多系列参数校验与 Action 记录 |
 

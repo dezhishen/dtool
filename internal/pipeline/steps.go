@@ -41,6 +41,10 @@ type Env struct {
 	// EngineOpts 是该后端在配置文件 db.engine.<name> 下的全部配置。
 	Engine     string
 	EngineOpts map[string]any
+	// Converter 传给转换的转换器名（auto / 已注册转换器，见 converter.Resolve）。
+	// 转换器的参数目前没有配置文件入口（xlsx 也还没有可调参数），
+	// 所以 Convert 收到的是 nil；接配置时在这里加一个 ConverterOpts 即可。
+	Converter string
 }
 
 // Excel 转换的内存预估（流式转换后实测：13KB→18.5MB、7.4MB→47MB、17.8MB→76MB，
@@ -98,6 +102,11 @@ func (e *Env) run(typ string, input map[string]any, parent, derived string,
 type ConvertParams struct {
 	Input, Sheet string
 	Name         string // 数据集名，缺省取输入文件名（指定 --sheet 时追加 _<sheet>）
+	Converter    string // 转换器名，空表示按输入扩展名自动选（见 converter.Resolve）
+	// Layout 是已确认的表结构：nil 表示让转换器自己探测。
+	// 交互式流程会先 Inspect 拿到它、由人/agent 改完后原样传回来，从而让第二次
+	// 转换走「用确认过的结构」，而不是重新猜一遍。
+	Layout *converter.Layout
 }
 
 // DefaultDatasetName 由输入文件名（及工作表）生成数据集名。
@@ -120,7 +129,9 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 	var res *types.ConvertResult
 	a, err := e.run("convert", map[string]any{"input": p.Input, "sheet": p.Sheet, "name": name},
 		parentID, "", func(a *action.Action, _ string) (*action.Output, error) {
-			// 放进回调内，内存不足时同样留下一条 failed 的 Action，便于事后排查
+			// 放进回调内，内存不足时同样留下一条 failed 的 Action，便于事后排查。
+			// 这里的估算口径来自 xlsx 转换器（固定开销 + 文件 × 系数）；接入别的格式时
+			// 要跟着换——所以它和 ConvertParams.Converter 是绑在一起的一对。
 			size := memguard.SizeOf(p.Input)
 			mem := memguard.Budget(e.MaxMemory)
 			need := xlsxNeed(size)
@@ -139,7 +150,8 @@ func (e *Env) Convert(p ConvertParams, parentID string) (*types.ConvertResult, e
 			}
 			defer os.RemoveAll(stage)
 			now := time.Now().UTC().Truncate(time.Second) // 与 Schema 中的秒级 updated_at 保持一致
-			r, err := converter.ConvertExcel(converter.Options{Ctx: e.Ctx, Input: p.Input, Sheet: p.Sheet, OutDir: stage,
+			r, err := converter.Convert(converter.Options{Ctx: e.Ctx, Converter: p.Converter,
+				Layout: p.Layout, Input: p.Input, Sheet: p.Sheet, OutDir: stage,
 				UpdatedAt: now, PreviewRows: e.Preview})
 			if err != nil {
 				return nil, err

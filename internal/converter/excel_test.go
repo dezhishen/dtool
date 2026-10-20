@@ -108,7 +108,7 @@ func TestConvertExcelMatchesReference(t *testing.T) {
 	path := writeTrickyXlsx(t, dir)
 
 	wantHeaders, wantSchema, wantRows, wantWarns := referenceConvert(t, path)
-	res, err := ConvertExcel(Options{Input: path, OutDir: dir, PreviewRows: 2})
+	res, err := Convert(Options{Input: path, OutDir: dir, PreviewRows: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestConvertExcelEmptyData(t *testing.T) {
 	if err := f.SaveAs(path); err != nil {
 		t.Fatal(err)
 	}
-	res, err := ConvertExcel(Options{Input: path, OutDir: dir})
+	res, err := Convert(Options{Input: path, OutDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestConvertExcelInterrupted(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := ConvertExcel(Options{Ctx: ctx, Input: src, OutDir: out})
+	_, err := Convert(Options{Ctx: ctx, Input: src, OutDir: out})
 	var te *types.Error
 	if !errors.As(err, &te) || te.Code != types.CodeInterrupted || !strings.Contains(te.Message, "已中断") {
 		t.Fatalf("err = %v，应为 CodeInterrupted", err)

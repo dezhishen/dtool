@@ -20,10 +20,16 @@
 
 | # | 命令 | 作用 |
 |---|------|------|
-| 1 | `dtool convert --input ../data/messy.xlsx --name messy` | 转换时把所有自动修正记录进 `warnings` |
-| 2 | `dtool datasets show messy` | 看修正后的列名与类型（`金额` 因含 `N/A` 被判为 string） |
-| 3 | `dtool query --sql "SELECT 编号, 手机号, CAST(NULLIF(金额, 'N/A') AS REAL) AS 金额 FROM messy"` | `N/A` → NULL，再转成数值参与计算 |
-| 4 | `dtool query --sql '…COUNT("名称_2"), COUNT("数量")…'` | 统计每列的有效值个数（NULL 不计入） |
+| 1 | `dtool convert --input ../data/messy.xlsx --rehearse` | **预演练**（只读）：表头行可能是第几行、每列还能是什么类型，各带打分与影响 |
+| 2 | `dtool convert --input ../data/messy.xlsx --inspect` | **看结构**（只读）：当前方案 + 需要人定的 `questions` + 自动处理的 `warnings` |
+| 3 | `dtool convert --input ../data/messy.xlsx --layout layout.json --name messy` | 按**确认稿**转换：`金额` 含 `N/A` 只能是 string、手机号保留前导零；结构与文件不符会直接报错 |
+| 4 | `dtool datasets show messy` | 看确认后的列名与类型（每列 `source: confirmed`） |
+| 5 | `dtool query --sql "SELECT 编号, 手机号, CAST(NULLIF(金额, 'N/A') AS REAL) AS 金额 FROM messy"` | `N/A` → NULL，再转成数值参与计算 |
+| 6 | `dtool query --sql '…COUNT("名称_2"), COUNT("数量")…'` | 统计每列的有效值个数（NULL 不计入） |
+
+前两步都**只读**：不建数据集、不记 Action、可反复执行，强隐私下也只输出结构（表头行号、列名、类型、计数），
+不含单元格内容。`layout.json` 是本示例预先确认好的结构文件——真实使用中它来自 `--inspect` 的输出，
+由人/agent 把 `columns[].type` 定下来、删掉 `questions` 后保存。
 
 ## 运行
 
@@ -36,7 +42,7 @@ bash examples/03-messy-data/run.sh  # 也可 DTOOL=/path/to/dtool bash …
 
 | 文件 | 内容 |
 |------|------|
-| `.dtool/datasets/messy/` | 清洗后的数据集与 Schema |
+| `.dtool/datasets/messy/` | 清洗后的数据集与 Schema（列类型带 `source: confirmed`） |
 | `.dtool/` 下 Action 记录 | `convert` 的 `warnings`、查询 SQL；结果预览仅本机落盘，强隐私下不输出 |
 
 控制台会直接打印 warnings（这就是「改了什么」的清单）：

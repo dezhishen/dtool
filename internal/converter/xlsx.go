@@ -17,27 +17,30 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-type Options struct {
-	// Ctx 用于响应中断（Ctrl+C / SIGTERM）；nil 表示不检查。
-	Ctx         context.Context
-	Input       string
-	Sheet       string
-	OutDir      string
-	UpdatedAt   time.Time // 写入 Schema 的更新日期，零值取当前时间
-	PreviewRows int       // 保留多少条类型化记录供调用方预览（0 表示不留）
+// xlsxConverter 是内置的 .xlsx 转换器：excelize 流式读取单元格，产出统一形状的数据集。
+type xlsxConverter struct{}
+
+func init() {
+	Register(DefaultConverterName, []string{".xlsx"}, func() Converter { return &xlsxConverter{} })
 }
 
-type Result struct {
-	DataFile    string
-	SchemaFile  string
-	Sheet       string
-	Columns     []string
-	RecordCount int
-	Preview     []types.Row // 前 PreviewRows 条记录（类型化），供 Action 预览
-	Warnings    []string
+var _ Converter = (*xlsxConverter)(nil)
+
+func (c *xlsxConverter) Name() string { return DefaultConverterName }
+
+func (c *xlsxConverter) Extensions() []string { return []string{".xlsx"} }
+
+// Configure 是初始化回调。xlsx 目前没有可调参数：未知键一律报错，
+// 而不是静默忽略——配置拼错却毫无反应，是最难查的一类问题。
+func (c *xlsxConverter) Configure(opts map[string]any) error {
+	if len(opts) == 0 {
+		return nil
+	}
+	return types.Errorf(types.CodeUsage, "xlsx 转换器不支持配置项：%s", strings.Join(sortedKeys(opts), ", ")).
+		WithHint("convert.converter.xlsx 目前没有可配置项，删掉这些键即可")
 }
 
-// ConvertExcel 流式读取 xlsx，写出 data.json（保持列顺序）与 data.schema.json。
+// Convert 流式读取 xlsx，写出 data.json（保持列顺序）与 data.schema.json。
 //
 // 两阶段、单次解析：
 //
@@ -46,7 +49,7 @@ type Result struct {
 //
 // 全程只驻留「一行 + 每列统计」，峰值内存与行数无关。旧实现把全部单元格、
 // 转置副本、类型化行以及整块序列化的 JSON 同时放在内存里（150k 行实测 1.5GB）。
-func ConvertExcel(o Options) (*Result, error) {
+func (c *xlsxConverter) Convert(o Options) (*Result, error) {
 	ctx := o.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -69,6 +72,9 @@ func ConvertExcel(o Options) (*Result, error) {
 
 	sheets := f.GetSheetList()
 	sheet := o.Sheet
+	if sheet == "" && o.Layout != nil {
+		sheet = o.Layout.Sheet // 确认过的结构优先：改过工作表就按改后的来
+	}
 	if sheet == "" {
 		if len(sheets) == 0 {
 			return nil, fmt.Errorf("workbook has no sheets")
@@ -96,7 +102,11 @@ func ConvertExcel(o Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	headers, stats, records, scanWarns, err := scanRows(ctx, f, sheet, out)
+	headerRow := 0
+	if o.Layout != nil {
+		headerRow = o.Layout.HeaderRow
+	}
+	headers, stats, records, scanWarns, err := scanRows(ctx, f, sheet, headerRow, out)
 	if err != nil {
 		out.Close()
 		os.Remove(rowsFile)
@@ -112,7 +122,10 @@ func ConvertExcel(o Options) (*Result, error) {
 	if headers == nil {
 		return nil, fmt.Errorf("sheet %q is empty", sheet)
 	}
-	res.Columns = headers
+	// 结构对不上就失败：文件换了、Layout 过期，都要走「重新 inspect」而不是静默重猜。
+	if err := Validate(c, o.Layout, len(headers)); err != nil {
+		return nil, err
+	}
 	res.RecordCount = records
 	res.Warnings = append(res.Warnings, scanWarns...)
 
@@ -120,6 +133,12 @@ func ConvertExcel(o Options) (*Result, error) {
 	for i, h := range headers {
 		schema[i] = stats[i].column(h, records)
 	}
+	if o.Layout != nil {
+		if err := applyLayout(headers, schema, stats, o.Layout); err != nil {
+			return nil, err
+		}
+	}
+	res.Columns = headers
 
 	// 阶段 2：按 Schema 把 JSONL 写成最终 data.json
 	res.DataFile = filepath.Join(o.OutDir, "data.json")
@@ -157,7 +176,7 @@ func interruptedErr() error {
 		WithHint("重跑该命令即可；上一次的临时文件已由 staging 目录清理")
 }
 
-func scanRows(ctx context.Context, f *excelize.File, sheet string, w io.Writer) ([]string, []*colStat, int, []string, error) {
+func scanRows(ctx context.Context, f *excelize.File, sheet string, headerRow int, w io.Writer) ([]string, []*colStat, int, []string, error) {
 	it, err := f.Rows(sheet)
 	if err != nil {
 		return nil, nil, 0, nil, err
@@ -172,8 +191,10 @@ func scanRows(ctx context.Context, f *excelize.File, sheet string, w io.Writer) 
 	)
 	bw := bufio.NewWriterSize(w, 1<<20)
 	defer bw.Flush()
+	var rownum int
 	for rows := 0; it.Next(); {
-		if rows%rowsCheckInterval == 0 {
+		rownum++
+		if rownum%rowsCheckInterval == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, nil, 0, nil, interruptedErr()
 			}
@@ -183,9 +204,18 @@ func scanRows(ctx context.Context, f *excelize.File, sheet string, w io.Writer) 
 			return nil, nil, 0, nil, err
 		}
 		if allBlank(cells) {
+			if headerRow > 0 && rownum == headerRow {
+				return nil, nil, 0, nil, types.Errorf(types.CodeUsage,
+					"第 %d 行是表头行，但它是空行", headerRow).
+					WithHint("用 inspect 确认 header_row，或去掉这个设定按首个非空行当表头")
+			}
 			continue
 		}
 		if headers == nil {
+			// 结构里指定了表头行时，之前的行一律视为标题/说明行跳过。
+			if headerRow > 0 && rownum != headerRow {
+				continue
+			}
 			headers, warnings = normalizeHeaders(cells, warnings)
 			stats = make([]*colStat, len(headers))
 			for i := range stats {

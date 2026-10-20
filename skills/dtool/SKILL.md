@@ -160,6 +160,13 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 - 需要重申交付内容时用 `dtool deliver <action_id>`，它只返回 `path`/`abs_path`/`mime`/`bytes`/`sha256` 与 `send` 提示。
 - 回答“有哪些数据、有哪些列”用 `datasets show` 的结构字段（`type`/`nullable`/`unique`/`distinct_count`/`role`），不依赖具体值。
 - 只有用户本人把配置改成 `privacy: normal` 后，才允许 `query --rows` / `datasets values` / `actions show --full` / `actions output`。Agent 不得自行改配置或建议绕过。
+- **结构探测不算数据动作**：`--inspect` / `--rehearse` 在强隐私下也允许，但只输出结构（表头行号、列名、类型、计数、候选）；
+  默认不会带单元格内容——不要向用户复述任何取值，也不要试图用预演练绕过隐私（`privacy: normal` 才附带样例）。
+- **转换前先确认结构**：`dtool convert --input x.xlsx --rehearse` 给出候选（表头行/工作表/每列类型，各带打分与影响），
+  `--inspect` 给出当前方案与待确认问题（questions）。把用户确认的结果写进 layout JSON，再用 `--layout` 转换；
+  带 `--layout` 时不再自动探测，结构对不上会报错；`columns[].type` 只能无损修改（改成整列确实满足的类型或
+  `string`），把混了异常值的列硬改成 integer 会被拒绝。`columns[].candidates` 非空表示规则分不开
+  （如 0/1 → integer/boolean、Excel 日期格式与取值冲突），按业务问用户后再填 `type`。不要靠反复改参数来试结构。
 - **跨引擎不要直接比 `sha256`**：没有稳定 `ORDER BY` 时，SQLite 与 DuckDB 的行序可能不同，产物内容等价但哈希不同。要比对一致性，先在 SQL 里加确定的 `ORDER BY`。
 - 产物路径都是相对项目目录的：数据集 `.dtool/datasets/<name>/`，查询 `.dtool/outputs/queries/<id>/result.json`，图表 `.dtool/outputs/charts/<id>/`。
 

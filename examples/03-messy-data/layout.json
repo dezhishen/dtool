@@ -1,0 +1,43 @@
+{
+  "format": "xlsx",
+  "version": 1,
+  "sheet": "原始数据",
+  "header_row": 1,
+  "columns": [
+    {
+      "name": "编号",
+      "type": "integer",
+      "source": "confirmed"
+    },
+    {
+      "name": "col_2",
+      "type": "string",
+      "source": "confirmed"
+    },
+    {
+      "name": "名称",
+      "type": "string",
+      "source": "confirmed"
+    },
+    {
+      "name": "名称_2",
+      "type": "string",
+      "source": "confirmed"
+    },
+    {
+      "name": "手机号",
+      "type": "string",
+      "source": "confirmed"
+    },
+    {
+      "name": "金额",
+      "type": "string",
+      "source": "confirmed"
+    },
+    {
+      "name": "数量",
+      "type": "integer",
+      "source": "confirmed"
+    }
+  ]
+}
