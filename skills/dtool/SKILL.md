@@ -113,7 +113,8 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 ## SQL 规则（最常踩坑）
 
 - 表名：**数据集名**、`--source 别名=引用` 的别名，或**双引号/反引号**包裹的文件路径。**单引号无效**（那是字符串）。含中文/特殊字符的列名用双引号：`SUM("销量")`。
-- 默认引擎是内存 SQLite（`--engine duckdb` 换 DuckDB）：数值列按**整列**推断类型，`WHERE amount > 60`、`ORDER BY` 按数值比较；日期是 `TEXT`（ISO 格式），用 `date()` 等函数或字符串比较。
+- 默认 `auto` 落到内存 SQLite（`--engine duckdb` 换 DuckDB）：数值列按**整列**推断类型，`WHERE amount > 60`、`ORDER BY` 按数值比较；日期是 `TEXT`（ISO 格式），用 `date()` 等函数或字符串比较。
+- **引擎方言差异**：DuckDB 支持 `ROLLUP` / `CUBE` / `GROUPING SETS` / `QUALIFY`，SQLite 对这些语法报 `code 4`（`no such function` / `syntax error`）——这是引擎差异，不是工具缺陷。多维聚合或 `QUALIFY` 直接用 `--engine duckdb`。
 - 沙箱默认开启：只允许单条 `SELECT`/`WITH`；文件只能来自工作区、当前目录或 `--source`。不要尝试 `PRAGMA`/`ATTACH`/多语句。
 - 结果过大会报错（`--max-rows`，默认 10000）：加 `LIMIT` 或先聚合。
 
@@ -141,7 +142,7 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 ```
 
 支持 `INNER`/`LEFT`/`CROSS JOIN`、`WITH`（CTE）、子查询、`UNION [ALL]`、窗口函数
-（`ROW_NUMBER`/`RANK`/`LAG` 等）；沙箱仍只允许**单条 `SELECT`/`WITH`**，`PRAGMA`/`ATTACH`/多语句会被拒。
+（`ROW_NUMBER`/`RANK`/`LAG` 等）；沙箱仍只允许**单条 `SELECT`/`WITH`**，`PRAGMA`/`ATTACH`/多语句会被拒。因此 `QUALIFY` 这类以 `SELECT` 开头的方言可用，而 `PIVOT` 等非 `SELECT` 语句即使引擎支持也会被沙箱拒绝。
 
 要点与坑：
 
@@ -159,6 +160,7 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 - 需要重申交付内容时用 `dtool deliver <action_id>`，它只返回 `path`/`abs_path`/`mime`/`bytes`/`sha256` 与 `send` 提示。
 - 回答“有哪些数据、有哪些列”用 `datasets show` 的结构字段（`type`/`nullable`/`unique`/`distinct_count`/`role`），不依赖具体值。
 - 只有用户本人把配置改成 `privacy: normal` 后，才允许 `query --rows` / `datasets values` / `actions show --full` / `actions output`。Agent 不得自行改配置或建议绕过。
+- **跨引擎不要直接比 `sha256`**：没有稳定 `ORDER BY` 时，SQLite 与 DuckDB 的行序可能不同，产物内容等价但哈希不同。要比对一致性，先在 SQL 里加确定的 `ORDER BY`。
 - 产物路径都是相对项目目录的：数据集 `.dtool/datasets/<name>/`，查询 `.dtool/outputs/queries/<id>/result.json`，图表 `.dtool/outputs/charts/<id>/`。
 
 ## 对话场景
@@ -202,7 +204,7 @@ stdout 错误 JSON：`{"error","detail","hint","code","action_id"}`。退出码�
 font: /usr/share/fonts/truetype/arphic/uming.ttc   # 相对路径相对配置文件，支持 ~/
 workspace: .dtool
 preview_rows: 20
-engine: auto      # 查询后端：auto（默认 sqlite）/ 已注册引擎名
+engine: auto      # auto（默认落到内存 SQLite）/ 已注册引擎名
 db:
   engine:         # 各后端的配置（整棵子树交给后端，拼错键会直接报错）
     sqlite:
