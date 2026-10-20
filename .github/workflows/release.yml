@@ -103,6 +103,16 @@ jobs:
         with:
           msystem: UCRT64
           install: mingw-w64-ucrt-x86_64-gcc
+      - name: Windows：固定 GCC 15（DuckDB 预编译库使用 emulated TLS）
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          # GCC 16 起 MinGW 默认改用原生 TLS，而 duckdb-go 的 windows 静态库仍引用
+          # __emutls_v._ZSt11__once_call（emulated TLS）。固定到最后的 emutls 版本 15.2.0。
+          pacman -U --noconfirm \
+            https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gcc-libs-15.2.0-14-any.pkg.tar.zst \
+            https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gcc-15.2.0-14-any.pkg.tar.zst
+          gcc --version | head -1
       - name: Windows：把 UCRT64 gcc 加进 PATH
         if: runner.os == 'Windows'
         shell: pwsh
