@@ -1,6 +1,6 @@
 # dtool
 
-纯 Go、无 CGO、单二进制的本地数据 Pipeline CLI：Excel → JSON(+Schema) → SQL → 图表/表格，每一步都记录为可追加、可派生的 Action。设计见 [Design.md](Design.md)。
+本地数据 Pipeline CLI：Excel → JSON(+Schema) → SQL → 图表/表格，每一步都记录为可追加、可派生的 Action。构建同时包含 SQLite 与 DuckDB 两个查询引擎（`--engine` 切换）；构建需要 CGO（DuckDB 依赖平台 C 库）。设计见 [Design.md](Design.md)。
 
 ```bash
 # 只转换：持久化为独立数据集 .dtool/datasets/<name>/，之后可反复使用
@@ -53,12 +53,15 @@ SQL 表名：用 `--source 别名=引用`，或用**双引号**包裹文件路�
 
 ## 安装
 
-从 [Releases](https://github.com/dezhishen/dtool/releases) 下载对应平台的包（单二进制、无外部依赖，Linux/macOS/Windows × amd64/arm64）：
+从 [Releases](https://github.com/dezhishen/dtool/releases) 下载对应平台的包（**已内置 DuckDB 后端**，`--engine duckdb` 开箱可用）：
 
-| 平台 | 包名 |
-|------|------|
-| Linux / macOS | `dtool_<版本>_<os>_<arch>.tar.gz` |
-| Windows | `dtool_<版本>_windows_<arch>.zip`（内含 `dtool.exe`） |
+| 平台 | 包名 | 说明 |
+|------|------|------|
+| Linux（amd64 / arm64） | `dtool_<版本>_linux_<arch>.tar.gz` | 静态链接，下载即用 |
+| macOS（amd64 / arm64） | `dtool_<版本>_darwin_<arch>.tar.gz` | 使用系统库 |
+| Windows（amd64） | `dtool_<版本>_windows_amd64.zip`（内含 `dtool.exe`） | 静态链接（UCRT 系统库） |
+
+> `windows/arm64` 不在支持范围内：DuckDB 没有该平台的预编译库，而 dtool 的每个二进制都必须包含 DuckDB。
 
 包内除可执行文件外还有 `README.md`、`SKILL.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`；其中 `SKILL.md`
 就是仓库里那份 Agent Skill 包 [skills/dtool/SKILL.md](skills/dtool/SKILL.md)（解包后可直接丢进平台的技能目录）。
@@ -103,7 +106,7 @@ dtool version --short      # 只输出版本号
 dtool version --deps       # 附带编译进二进制的依赖模块及版本
 ```
 
-元数据在打包时由 `scripts/ldflags.sh` 注入（`make build`、`make build-all`、`make release-build` 和 Release 流水线共用同一份），本机 `go build` 则回退到 Go 嵌入的 VCS 信息。`channel` 由版本号判定：`X.Y.Z` 为 `stable`，`X.Y.0-preview.N` 为 `preview`，`dev-*` 为 `dev`，其余为 `local`。
+元数据在打包时由 `scripts/ldflags.sh` 注入（`make build`、`make release-build` 和 Release 流水线共用同一份），本机 `go build` 则回退到 Go 嵌入的 VCS 信息。`channel` 由版本号判定：`X.Y.Z` 为 `stable`，`X.Y.0-preview.N` 为 `preview`，`dev-*` 为 `dev`，其余为 `local`。
 
 **main 分支的测试构建**：CI 在**每 4 小时**定时构建全部平台（也可在 Actions 页面手动触发），版本号为
 `dev-<Actions run id>`，并**滚动发布**到固定 tag `dev`（同名资产每次覆盖，只保留最新一次）。
@@ -148,7 +151,7 @@ bash examples/01-sales-report/run.sh       # 只跑单个
 
 ## 装入方式与大数据量
 
-JSON → 内存 SQLite 的装入方式由 `--load-mode`（`auto`（默认）/ `stream` / `full`）和
+JSON → 查询库（SQLite / DuckDB 共用同一装入器）的装入方式由 `--load-mode`（`auto`（默认）/ `stream` / `full`）和
 `--store`（`auto`（默认）/ `memory` / `disk`）组合成三个执行档：
 
 | 执行档 | 峰值内存 | 相对速度 | 适用 |
@@ -235,13 +238,15 @@ Windows 读 **Job Object 的内存上限**（`JOB_OBJECT_LIMIT_PROCESS_MEMORY` 0
 读不到时 `meminfo` 的 `warnings` 会直说「预算回落到系统可用内存，请用 `--max-memory`」，
 不会再安静地按 16GB 继续跑。
 
-Go 堆软上限只取可用预算的 **3/4**：软上限只管 Go 堆，而 SQLite 页缓存是 mmap/VirtualAlloc 出来的、
-同样计入提交量，堆按 100% 走就会把提交顶到硬上限。
+Go 堆软上限只取可用预算的 **3/4**：软上限只管 Go 堆，而 SQLite 后端的页缓存是
+mmap/VirtualAlloc 出来的、同样计入提交量，堆按 100% 走就会把提交顶到硬上限。
 
 ⚠️ 关闭检查（`--max-memory 0`）或平台探测不到上限时，顶到硬上限的失败方式**不可控**：
-可能是可读的结构化错误（`内存不足：…SQLite 分配失败`，code 4，驱动原文 `out of memory (7)`），
+可能是可读的结构化错误（`内存不足：… sqlite 引擎分配失败`，code 4，驱动原文
+`out of memory (7)`；DuckDB 对应 `Out of Memory Error`），
 也可能是 Go runtime 的 `fatal error: out of memory`（**不可恢复**，会打印 goroutine 堆栈、退出码 2）。
-根因是 modernc/SQLite 的页缓存走 mmap/VirtualAlloc，不受 Go 堆软上限约束，
+SQLite 后端的根因是 modernc/SQLite 的页缓存走 mmap/VirtualAlloc，不受 Go 堆软上限约束，
+（DuckDB 后端则可用 `db.engine.duckdb.memory_limit` 直接限制其 C++ 侧内存）
 所以「给得出预算」比「靠运气」重要——容器里请显式 `--max-memory`（或让 dtool 读到 cgroup/Job Object）。可用全局参数覆盖：
 
 ```bash
@@ -254,8 +259,14 @@ DTOOL_MAX_MEMORY=2G dtool pipeline ...    # 环境变量，适合容器/CI
 
 ```yaml
 load_mode: auto      # auto / stream / full
-store: auto          # auto / memory / disk（SQLite 库落在哪）
+store: auto          # auto / memory / disk（库落在哪，SQLite / DuckDB 通用）
+engine: auto         # auto（默认 sqlite）/ 已注册引擎名
 mem_policy: try      # try（仍试最省档）/ strict（直接失败）
+db:
+  engine:            # 每个后端的配置，整棵子树交给后端初始化回调
+    sqlite:
+      cache_size_kb: 8192   # 页缓存 KiB；磁盘库默认 8000
+      temp_store: file      # file（默认，排序落盘）/ memory
 ```
 
 需要**强行指定**而不靠自适应时（排查、对比、或你就是想快）：
@@ -319,7 +330,7 @@ workflow 的 artifact（`gh run download <run id> --name dtool-dev-<run id>`，1
 
 发布时机（`.github/workflows/dev-release.yml`）：**每 4 小时**定时一次，或在 Actions 页面**手动触发**
 （`gh workflow run dev-release.yml`，`-f force=true` 可忽略缓存强制重发）。**刻意不挂 push**——
-否则每次提交都要跑一轮六平台构建 + 覆盖上传；想「推完立刻要 dev」就手动触发一次。两种触发都会先比对
+否则每次提交都要跑一轮五平台构建 + 覆盖上传；想「推完立刻要 dev」就手动触发一次。两种触发都会先比对
 `dev` 发布里 `dev-build.txt` 记录的 commit——**commit 没变就跳过**，不重复构建、不滚动构建号。
 
 升级前会校验 Release 中 `checksums.txt` 的 sha256，并先运行新二进制自检；任何一步失败都不会改动现有文件。Windows 下运行中的 exe 不能覆盖，因此先把旧文件改名为 `.old` 再让新文件就位（失败回滚，`.old` 下次启动自动清理）。GitHub 限流时设置 `GITHUB_TOKEN`；`DTOOL_REPO` / `DTOOL_UPDATE_API` 可指向镜像。
@@ -379,12 +390,21 @@ dtool -c config.yaml visualize --input latest:query --type bar --x 区域 --y �
 ## 开发
 
 ```bash
-make check               # gofmt + vet + test
-make build               # 当前平台
-make build-windows-arm64 # 单个平台（linux/darwin/windows × amd64/arm64）
-make build-all           # 全部平台二进制 -> dist/bin/
-make release-build       # 全部平台压缩包 + checksums.txt -> dist/（Release 同款）
+make check         # gofmt + vet + test + 脚本检查（CGO=1，两种引擎一起测）
+make build         # 当前平台：sqlite + duckdb（CGO=1，需要 gcc）
+make release-build # 当前平台发布包（含 DuckDB）+ checksums.txt -> dist/
+make test          # CGO=1 go test ./...
 ```
+
+**每个二进制都包含两种引擎**：DuckDB 由 `internal/query/duckdb.go` 的 `//go:build cgo`
+自动启用，所以 `CGO_ENABLED=1`（Go 的默认值）构建出的 `--engine sqlite|duckdb` 都可用，
+不需要 `-tags`。CGO 是唯一的构建方式：`CGO_ENABLED=0` 会在编译期失败并提示需要 CGO，
+不存在只含 sqlite 的变体。
+
+发布包由 CI 用**原生 runner 矩阵**构建（linux amd64/arm64、darwin amd64/arm64、windows
+amd64）；DuckDB 走 CGO，无法从一台机器交叉编译到所有平台。发布包会链接平台运行时库
+（Linux/Windows 优先全静态链接，见 `scripts/build-release.sh`）。DuckDB 在装入完成后会
+关闭外部文件访问（沙箱），配置项见 `db.engine.duckdb.{threads,memory_limit,temp_directory}`。
 
 ## 发版
 
@@ -416,6 +436,8 @@ make scripts-test                                            # 选择规则（�
 
 ## 许可证
 
-dtool 以 [MIT](LICENSE) 协议发布。依赖均为宽松协议（MIT / BSD-3-Clause / Apache-2.0；`golang/freetype` 双协议中选用 FreeType License），不含 GPL/LGPL/MPL 代码。
+dtool 以 [MIT](LICENSE) 协议发布。依赖均为宽松协议（MIT / BSD-3-Clause / Apache-2.0；
+DuckDB 及其 Go 驱动、预编译库均为 MIT；`golang/freetype` 双协议中选用 FreeType License），
+不含 GPL/LGPL/MPL 代码。
 
 第三方版权声明与许可证全文（`THIRD_PARTY_NOTICES.md`）在每次打包时由 `scripts/gen-notices.sh` 根据当前依赖自动生成，并随发布压缩包分发；它不提交到仓库，升级依赖无需额外操作。需要时可运行 `make notices` 本地生成。

@@ -4,18 +4,20 @@
 
 ### 1.1 目标
 
-构建一个**纯 Go、无 CGO、单二进制**的命令行工具，用于本地数据处理 Pipeline：
+构建一个**单二进制**的命令行工具（同时内置 SQLite 与 DuckDB；构建需要 CGO），用于本地数据处理 Pipeline：
 
 1. **导入**：将 Excel 表格转换为 JSON 数据与 JSON Schema（Schema 从数据推断，供 AI 快速理解结构）。
-2. **查询**：基于 SQL 查询大量 JSON 数据（底层把 JSON 载入内存 SQLite，使用纯 Go 的 modernc.org/sqlite 驱动）。
+2. **查询**：基于 SQL 查询大量 JSON 数据（把 JSON 载入查询引擎；默认 sqlite，可选 duckdb，`--engine` 切换）。
 3. **输出**：将查询结果渲染为表格（CSV / Markdown / JSON）或图表（PNG / SVG）。
 4. **记录**：每一步的完整结果（输入、产物、数据预览、Schema、错误）都持久化为 **Action**，形成可追溯的时间线。
 5. **协作**：用户可通过 AI 对话，基于已有 Action 记录**追加、修正、派生**新的步骤，无需从头执行。
 
 ### 1.2 设计原则
 
-- **单二进制**：所有功能编译进一个可执行文件，无外部运行时依赖。
-- **纯 Go**：`CGO_ENABLED=0` 可编译，方便交叉编译与分发。
+- **单二进制**：所有功能编译进一个可执行文件；默认构建无外部运行时依赖，发布版内置
+  DuckDB（Linux/Windows 优先全静态链接）。
+- **单二进制、可分发**：CGO 只用于 DuckDB 的平台预编译库；Linux/Windows 发布包优先
+  全静态链接，下载即用。
 - **契约稳定**：每个子命令的 stdout 输出为结构化 JSON，错误信息包含可操作的上下文。
 - **Action 自包含**：每条记录包含足够上下文，使 AI 无需重新执行即可理解并续写。
 - **可追加**：Action 不覆盖、可注释、可派生，支持对话式迭代。
@@ -30,16 +32,44 @@
 | CLI 框架 | `spf13/cobra` | 成熟、子命令支持好、自动生成帮助 |
 | Excel 读取 | `xuri/excelize/v2` | 纯 Go，支持 .xlsx |
 | Schema 推断 | 自研（约 150 行） | 从转换后的 JSON 数据推断，输出 AI 友好格式 |
-| SQL 引擎 | `modernc.org/sqlite`（内存库，自研载入） | 纯 Go；按整列推断类型建表，保证数值比较/排序正确 |
+| 默认 SQL 引擎 | `modernc.org/sqlite`（内存库，自研载入） | 纯 Go；按整列推断类型建表，保证数值比较/排序正确 |
 | 配置 | `gopkg.in/yaml.v3` | `-c config.yaml`，严格模式拒绝未知键 |
-| SQLite 驱动 | `modernc.org/sqlite` | 纯 Go，无 CGO |
+| SQLite 驱动 | `modernc.org/sqlite` | 纯 Go，无 CGO（默认后端） |
+| 可选 SQL 引擎 | `duckdb/duckdb-go/v2`（`//go:build cgo`，需 CGO） | 列式分析引擎；CGO=1 的构建自动包含，因此每个正式二进制都同时支持 `sqlite` 与 `duckdb` |
 | 图表生成 | `vicanso/go-charts/v2` | 纯 Go，支持折线/柱状/饼图等，输出 PNG/SVG；中文需要 CJK 字体，见 8.5 |
 | 表格输出 | 标准库 + 自定义格式化 | CSV / Markdown / JSON |
 | Action 存储 | 文件系统 + JSON | 每个 Action 一个文件，简单可读 |
 | ID 生成 | `oklog/ulid/v2` | Action 唯一标识，时间有序 |
 | Go 版本 | 最新稳定版（`go.mod` 中 `go` 指令取当前最新） | 模块路径 `github.com/dezhishen/dtool` |
 
-**引擎选型结论（spike 实测）**：最初计划用 trdsql，但实测发现它把 JSON 数值（`json.Number`）一律建成 `TEXT` 列，且仅按首行推断类型，导致 `WHERE amount > 60`、`ORDER BY` 变成文本比较，结果错误。因此改为**自研载入**：把 JSON 数组文件读入内存 SQLite（`modernc.org/sqlite`，`CGO_ENABLED=0` 可编译），按**整列**推断类型：全整数 `INTEGER`、全数值 `REAL`、其余 `TEXT`（布尔存 0/1，嵌套对象/数组存 JSON 文本），首行为 null 也不影响。顺带的好处：SQLite 从不触碰文件系统，沙箱更简单可靠。
+**引擎接口与配置**：查询后端实现 `internal/query.Engine`（`Name` / `Configure` /
+`Open` / `SQLType` / `IsOOM`），在 `init()` 里向注册表注册一个**工厂**；`--engine` 或配置
+`engine:` 选中后，每次执行新建实例并调用 `Configure`，参数是配置文件 `db.engine.<name>`
+下的整棵子树（后端自己解释键名，未知键必须报错）。注册工厂而非实例，是为了让配置只
+作用于本次执行、互不串味。默认后端 `sqlite` 支持 `cache_size_kb` 与 `temp_store`。
+
+`OpenOptions` 另外带运行时参数 `Store`（内存/磁盘）与 `Sandbox`：DuckDB 在装入完成后用
+`SET enable_external_access=false` 关掉执行期文件访问（`read_csv` / `read_parquet` /
+`glob` 一律被拒；数据早已由 Go 侧读入并 INSERT），`temp_directory` 指向本次执行的临时
+目录（DuckDB 默认会把溢出文件写到进程 CWD 的 `.tmp`）。DuckDB 的配置键是
+`db.engine.duckdb.{threads,memory_limit,temp_directory}`。
+
+**构建方式**：
+
+- **默认与发布**（`make build` / `make release-build`）都是 `CGO_ENABLED=1`：DuckDB 由
+  `internal/query/duckdb.go` 的 `//go:build cgo` 自动启用，**每个二进制都同时支持 sqlite
+  与 duckdb**，不需要 `-tags`。需要平台 C 工具链（Linux gcc / macOS Xcode CLT / Windows
+  MSYS2）。Linux/Windows 优先 `-extldflags=-static` 全静态链接（失败时回退动态并告警），
+  macOS 使用系统库。
+- **发布矩阵**：CI 用原生 runner 构建 linux amd64/arm64、darwin amd64/arm64、windows
+  amd64；DuckDB 没有 windows/arm64 预编译库，该平台不再随发布提供。
+- **不支持无 CGO 构建**：`CGO_ENABLED=0` 会在 `internal/query/cgo_required.go` 处
+  编译失败并提示需要 CGO，避免产出只含 sqlite 的二进制。
+- **CI**：`test` 用 CGO=1 跑三平台（含两种引擎的测试与 Linux 打包冒烟）；`lint` 负责
+  gofmt/vet/tidy/脚本检查。
+
+**引擎选型结论（spike 实测）**：最初计划用 trdsql，但实测发现它把 JSON 数值（`json.Number`）一律建成 `TEXT` 列，且仅按首行推断类型，导致 `WHERE amount > 60`、`ORDER BY` 变成文本比较，结果错误。因此改为**自研载入**：把 JSON 数组文件读入内存 SQLite（`modernc.org/sqlite`，SQLite 后端本身是纯 Go），按**整列**推断类型：全整数 `INTEGER`、全数值 `REAL`、其余 `TEXT`（布尔存 0/1，嵌套对象/数组存 JSON 文本），首行为 null 也不影响。顺带的好处：SQLite 从不触碰文件系统，沙箱更简单可靠；DuckDB 后端复用同一装入器，
+装入完成后用 `SET enable_external_access=false` 达到同等沙箱效果。
 
 **关于 Schema 生成的说明**：`invopop/jsonschema` 等库适用于**从 Go struct 反射生成 Schema**（结构编译期已知的场景）。本工具的场景是**运行时从 Excel 读取、结构未知**，因此 Schema 必须在 `convert` 过程中从数据本身推断。自研推断器代码量小、可精确控制输出格式，更适合 AI 读取。
 
@@ -365,8 +395,9 @@ dtool visualize --input latest:query --type pie --x region --y total
 | `--sandbox` | 默认开启：SQL 仅允许读取 `--source` 绑定文件与工作区内文件，禁止读取任意系统路径（如 `/etc/passwd`）、URL 与写入类语句 |
 | `--load-mode` | JSON 装入方式：`auto`（默认，按内存预算在 full+内存库 / stream+内存库 / stream+磁盘库 三档间选；整块解析仅在输入 <32MB 且预计峰值 ≤ 预算 80% 时使用）/ `stream` / `full` |
 | `--max-memory` | 内存预算，如 `4G`/`512M`；`0` 关闭检查（默认自动探测 cgroup v2/v1 与系统可用内存），见 8.4.1 |
-| `--store` | SQLite 库落在哪：`auto`（默认，按预算在内存库 / 磁盘库间选）/ `memory`（快）/ `disk`（峰值最低，临时表落盘，见 8.5） |
+| `--store` | 查询库落在哪（SQLite / DuckDB 通用）：`auto`（默认，按预算在内存库 / 磁盘库间选）/ `memory`（快）/ `disk`（峰值最低，临时表落盘，见 8.5） |
 | `--mem-policy` | 所有档都预计超预算时：`try`（默认）仍试最省档并把失败记入 Action（AI 可读后换招）/ `strict` 直接失败 |
+| `--engine` | 查询后端：`auto`（默认 `sqlite`）/ 已注册引擎名（默认构建含 `sqlite`、`duckdb`）。后端在 `internal/query` 的注册表里按名字解析（注册的是工厂，每次执行新建实例），见 2 技术选型 |
 | `-c, --config` | 配置文件，命令行参数优先；严格模式拒绝未知键 |
 
 **退出码与 stdout 约定**：成功退出码 0，stdout 为结构化 JSON；失败退出码非 0
@@ -439,7 +470,8 @@ dtool query \
 **内部实现**：
 
 - 重写 SQL：别名 / 文件路径（双引号、反引号，或 `FROM`/`JOIN` 后的裸路径）解析为文件，同一文件只载入一次。
-- 把用到的文件载入内存 SQLite（`sql.Open("sqlite", ":memory:")`，单连接），再执行查询，直接得到带类型的行（`int64` / `float64` / `string`）。
+- 把用到的文件载入查询库（`Engine.Open`；默认 sqlite 内存库，`--engine duckdb` 时为 DuckDB），
+  再执行查询，直接得到带类型的行（`int64` / `float64` / `string`）。
 - 沙箱：仅允许单条 `SELECT`/`WITH`（挡住 `ATTACH`/`PRAGMA`）；解析出的文件必须位于工作区、当前目录，或由 `--source` 显式绑定。
 - 根据 `--format` 格式化输出；完整结果始终落盘到产物文件，并受 `--max-rows`（默认 10000）约束。
 - `strong`（默认）stdout 只输出交付清单（见 4.3）；`normal` 才输出摘要，`--rows` 才附带行。
@@ -958,7 +990,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 
 ### 8.4.1 内存预算与 OOM 防护（internal/memguard）
 
-载入是「把整个 JSON 解析进内存 SQLite」，峰值内存与输入体积成正比（实测 JSON ≈ ×13）。这带来一个严重体验问题：**内存不足时进程会被内核 OOM 直接杀掉，用户看不到任何原因**。memguard 把这种情况变成普通错误：
+载入是「把整个 JSON 解析进查询库」，峰值内存与输入体积成正比（SQLite 后端实测 JSON ≈ ×13）。这带来一个严重体验问题：**内存不足时进程会被内核 OOM 直接杀掉，用户看不到任何原因**。memguard 把这种情况变成普通错误：
 
 | 环节 | 行为 |
 |------|------|
@@ -1090,7 +1122,7 @@ dev 构建之间没有版本序，硬比大小会出现「装完又说有新版�
 （升级端按资产名查哈希），这段逻辑落在 `scripts/dev-release-assets.sh` 并有单测。
 
 **触发与去重**（`.github/workflows/dev-release.yml`）：只有每 4 小时定时与手动触发（`force` 可强制）
-两种——**刻意不挂 push**：每次提交都跑一轮六平台构建 + 覆盖上传，既烧 CI 又让下面的 commit 校验
+两种——**刻意不挂 push**：每次提交都跑一轮五平台构建 + 覆盖上传，既烧 CI 又让下面的 commit 校验
 必然失效（push 时 commit 总是新的）。想「推完立刻要 dev」就手动触发。两种触发都先跑
 `scripts/dev-release-decision.sh`：把 `dev-build.txt` 里的 commit
 与当前 commit 比对，相同就跳过构建与上传——定时触发十有八九命中这条，省掉无意义的构建与
@@ -1127,6 +1159,12 @@ font: /usr/share/fonts/truetype/arphic/uming.ttc
 workspace: .dtool
 preview_rows: 20
 load_mode: auto       # auto / stream / full
+engine: auto          # auto（默认 sqlite）/ 已注册引擎名
+db:
+  engine:             # 每个后端的配置，整棵子树交给 Engine.Configure
+    sqlite:
+      cache_size_kb: 8192   # 页缓存 KiB；磁盘库默认 8000
+      temp_store: file      # file（默认，排序落盘）/ memory
 privacy: strong       # strong（默认）/ normal；只能用户本人改配置文件
 ```
 
@@ -1228,7 +1266,7 @@ dtool/
 │   │   └── schema.go       # Schema 推断
 │   ├── query/
 │   │   ├── query.go        # 重写/沙箱/执行
-│   │   ├── load.go         # JSON → 内存 SQLite
+│   │   ├── load.go         # JSON → 查询库（SQLite / DuckDB）
 │   │   └── perf_test.go    # 装入方式的内存/吞吐回归
 │   ├── visualize/
 │   │   └── chart.go
@@ -1318,16 +1356,23 @@ type ErrorResponse struct {
 ### 13.1 构建命令
 
 ```bash
-CGO_ENABLED=0 go build -o dtool -ldflags="-s -w" .
+CGO_ENABLED=1 go build -o dtool -ldflags="-s -w" .   # CGO=1 是 Go 的默认值
 ```
 
-### 13.2 交叉编译
+DuckDB 由 `//go:build cgo` 自动启用；`CGO_ENABLED=0` 会在 `internal/query/cgo_required.go`
+处编译失败（提示需要 CGO），因此不存在只含 sqlite 的构建。
+
+### 13.2 跨平台构建
+
+发布包由各平台原生 runner（或配置好对应 `CC` 的交叉环境）构建：
 
 ```bash
-GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -o dtool-linux-amd64
-GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build -o dtool-darwin-arm64
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o dtool-windows-amd64.exe
+CGO_ENABLED=1 GOOS=linux   GOARCH=amd64 go build -o dtool-linux-amd64 .
+CGO_ENABLED=1 GOOS=darwin  GOARCH=arm64 go build -o dtool-darwin-arm64 .
+CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -o dtool-windows-amd64.exe
 ```
+
+DuckDB 没有 windows/arm64 预编译库，该平台不在支持范围内。
 
 ### 13.3 Makefile
 
@@ -1335,11 +1380,11 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o dtool-windows-amd64.exe
 BINARY=dtool
 VERSION=$(shell git describe --tags --always)
 
-build:
-	CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o $(BINARY) .
+build:                      # 唯一构建方式：CGO=1（sqlite + duckdb）
+	CGO_ENABLED=1 go build -ldflags="-s -w -X main.version=$(VERSION)" -o $(BINARY) .
 
 test:
-	go test ./...
+	CGO_ENABLED=1 go test ./...
 
 clean:
 	rm -f $(BINARY)
@@ -1366,12 +1411,15 @@ github.com/spf13/cobra
 github.com/xuri/excelize/v2
 gopkg.in/yaml.v3
 modernc.org/sqlite
+github.com/duckdb/duckdb-go/v2
+github.com/duckdb/duckdb-go-bindings（含各平台预编译库）
 github.com/vicanso/go-charts/v2
 github.com/olekukonko/tablewriter
 github.com/oklog/ulid/v2
 ```
 
-全部为纯 Go 依赖，无 CGO 要求。Schema 推断逻辑自研，不引入外部 Schema 库。
+SQLite 后端与默认构建全部为纯 Go 依赖，无 CGO 要求；可选 DuckDB 后端需要 CGO
+（由 `//go:build cgo` 在 CGO=1 时自动引入）。Schema 推断逻辑自研，不引入外部 Schema 库。
 
 ---
 
@@ -1385,5 +1433,5 @@ github.com/oklog/ulid/v2
 | **派生链** | `--from action:<id>` 让新步骤关联上游，形成可追溯的演进路径 |
 | **`action:<id>` 引用** | Action 之间自然衔接，AI 无需管理路径 |
 | **数据推断 Schema** | 从 Excel 转换时一并生成，AI 可快速理解字段结构与取值 |
-| **纯 Go 单二进制** | 部署简单，交叉编译无障碍 |
-| **内存 SQLite** | 复用成熟 SQL 引擎，按整列推断类型，数值比较与排序正确 |
+| **纯 Go 单二进制** | 默认构建部署简单、交叉编译无障碍；发布版含 DuckDB，由原生矩阵构建 |
+| **双引擎** | SQLite（纯 Go、低开销）与 DuckDB（列式、大文件）按 `--engine` 切换；同一装入器保证类型与 Sandbox 一致 |

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/dezhishen/dtool/internal/memguard"
 	"github.com/dezhishen/dtool/pkg/types"
-	_ "modernc.org/sqlite"
 )
 
 type Options struct {
@@ -39,6 +39,15 @@ type Options struct {
 	// PlanFile 是选档历史（.dtool/plans/samples.json）；空表示不读不写。
 	PlanFile string
 	Lookup   func(name string) (path string, ok bool) // 数据集名 -> 数据文件，可为 nil
+	// EngineName 是后端名（"auto" 或注册表里的名字），来自 --engine / 配置文件。
+	// 空串与 "auto" 等价于默认后端。
+	EngineName string
+	// EngineOpts 是传给后端初始化回调（Engine.Configure）的全部配置，
+	// 对应配置文件里 db.engine.<name> 下的键值；nil 表示没有配置。
+	EngineOpts map[string]any
+	// Engine 是显式注入的后端实例（测试与嵌入方用）；非 nil 时优先于 EngineName。
+	// 两者同时给出时必须指向同一个引擎，否则报参数错误。
+	Engine Engine
 }
 
 var errMaxRows = errors.New("max rows exceeded")
@@ -59,15 +68,20 @@ const (
 // progressMinSize 可在测试中替换。
 var progressMinSize = uint64(memguard.DefaultProgressMinSize)
 
-// Run 重写表引用，把用到的 JSON 文件载入内存 SQLite（modernc，纯 Go）后执行查询。
+// Run 重写表引用，把用到的 JSON 文件载入查询后端（默认是纯 Go 的内存 SQLite）后执行查询。
+// 后端由 Options.Engine / Options.EngineName 决定，见 engineOf 与注册表。
 // 载入前会按可用内存做预估，载入/查询期间有内存看门狗，超限时以普通错误退出并给出原因。
-// Run 重写表引用，把用到的 JSON 文件载入 SQLite（modernc，纯 Go）后执行查询。
 //
 // 内存上限在这里的作用是**选执行档**，不是「过/不过」：按预算从快到省挑一档
 // （full+memory → stream+memory → stream+disk），只有「连最省档都预计放不下」时才
 // 触及失败路径，且默认策略是带着记录去试一次——失败会留在 Action 与选档历史里，
 // AI 据此换更省档重试。操作者可以用 --load-mode / --store 强行指定（见 ladder）。
 func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
+	// 先定后端：名字写错属于参数问题，应该在读文件、估内存之前就失败。
+	eng, err := engineOf(o)
+	if err != nil {
+		return nil, err
+	}
 	sqlText, binds, err := Rewrite(o)
 	if err != nil {
 		return nil, err
@@ -109,7 +123,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 	memguard.Debugf("看门狗=%s（阈值 %s，采样 %s）；Go 堆软上限=%s（阈值 %s）", onOff(mem.Threshold() > 0),
 		memguard.HumanSize(mem.Threshold()), interval, onOff(mem.Threshold() > 0), memguard.HumanSize(mem.SoftLimit()))
 
-	db, closeStore, err := openStore(ctx, spec.Store)
+	db, closeStore, err := eng.Open(ctx, OpenOptions{Store: spec.Store, Sandbox: o.Sandbox})
 	if err != nil {
 		return nil, err
 	}
@@ -121,8 +135,8 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 			size := memguard.SizeOf(b.Path)
 			memguard.Progress(os.Stderr, progressMinSize, filepath.Base(b.Path), size,
 				spec.Predicted(size), modeNote(spec.Mode))
-			if err := loadTable(ctx, db, b, spec.Mode); err != nil {
-				return wrapErr(ctx, o, fmt.Errorf("载入 %s: %w", filepath.Base(b.Path), err), "load")
+			if err := loadTable(ctx, eng, db, b, spec.Mode); err != nil {
+				return wrapErr(ctx, o, eng, fmt.Errorf("载入 %s: %w", filepath.Base(b.Path), err), "load")
 			}
 		}
 		return nil
@@ -153,7 +167,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 	}
 	res, err := collect(qctx, db, sqlText, o.MaxRows)
 	if err != nil {
-		return nil, wrapErr(qctx, o, err, phaseQuery)
+		return nil, wrapErr(qctx, o, eng, err, phaseQuery)
 	}
 	// 聚合段可能把峰值再推高：更新那条记录，让它反映「这条命令的完整代价」
 	// （记录已在装载后落盘一次，即使查询段崩了，装载段的数据也在）。
@@ -164,6 +178,7 @@ func Run(ctx context.Context, o Options) (*types.QueryResult, error) {
 	if err := hist.Save(); err != nil {
 		memguard.Debugf("选档历史更新失败：%v", err)
 	}
+	res.Engine = eng.Name()
 	res.Strategy = spec.Name
 	res.StrategyNote = plan.Reason
 	return res, nil
@@ -304,6 +319,17 @@ func collect(ctx context.Context, db *sql.DB, sqlText string, max int) (*types.Q
 				if math.IsNaN(x) || math.IsInf(x, 0) {
 					vals[i] = nil
 				}
+			case *big.Int:
+				// DuckDB 的 SUM(BIGINT) 是 HUGEINT，驱动扫出来是 *big.Int；
+				// 统一成 int64/uint64 或十进制字符串，保证 JSON/CSV 输出跨引擎一致。
+				switch {
+				case x.IsInt64():
+					vals[i] = x.Int64()
+				case x.IsUint64():
+					vals[i] = x.Uint64()
+				default:
+					vals[i] = x.String()
+				}
 			}
 		}
 		out.Rows = append(out.Rows, types.Row{Columns: cols, Values: vals})
@@ -316,18 +342,6 @@ func collect(ctx context.Context, db *sql.DB, sqlText string, max int) (*types.Q
 }
 
 const phaseQuery = "query"
-
-// sqliteNOMEM 识别 modernc/sqlite 的分配失败（SQLITE_NOMEM，驱动文本是
-// "out of memory (7)"）。它的页缓存是 mmap 出来的，不计入 Go 堆，所以当进程顶到
-// 外部硬上限（Windows Job Object、cgroup、ulimit）时会直接返回这个错误——此时
-// debug.SetMemoryLimit 帮不上忙，只有 --max-memory 预检与看门狗能提前拦住。
-func sqliteNOMEM(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "out of memory") || strings.Contains(msg, "sqlite_nomem")
-}
 
 func onOff(b bool) string {
 	if b {
@@ -357,7 +371,7 @@ func phaseLabel(phase string) string {
 	return "查询"
 }
 
-func wrapErr(ctx context.Context, o Options, err error, phase string) error {
+func wrapErr(ctx context.Context, o Options, eng Engine, err error, phase string) error {
 	var te *types.Error
 	switch {
 	case errors.As(err, &te):
@@ -376,11 +390,13 @@ func wrapErr(ctx context.Context, o Options, err error, phase string) error {
 		te.Hint = "重跑该命令即可；数据源与 SQL 本身没有问题"
 		return te
 	}
-	if sqliteNOMEM(err) {
-		// 把驱动原文（"载入 x.json: out of memory (7)"）翻译成「发生了什么 + 怎么办」。
-		te = types.Errorf(types.CodeExec, "内存不足：%s阶段 SQLite 分配失败", phaseLabel(phase))
-		te.Detail = err.Error() + "（进程顶到了外部内存上限，Go 堆软上限管不到 mmap 出去的页缓存）"
-		te.Hint = "缩小输入或改用 --load-mode stream；若是被容器/Job Object/ulimit 限制，用 --max-memory 显式声明预算让预检提前拦住（Windows 会自动识别 Job Object，macOS 需显式指定）"
+	if eng.IsOOM(err) {
+		// 把驱动原文（SQLite 的 "out of memory (7)"、DuckDB 的 "Out of Memory Error"）
+		// 翻译成「发生了什么 + 怎么办」。
+		te = types.Errorf(types.CodeExec, "内存不足：%s阶段 %s 引擎分配失败",
+			phaseLabel(phase), eng.Name())
+		te.Detail = err.Error() + "（进程顶到了外部内存上限，Go 堆软上限管不到引擎自身的内存）"
+		te.Hint = "缩小输入或改用 --load-mode stream；若是被容器/Job Object/ulimit 限制，用 --max-memory 显式声明预算让预检提前拦住（Windows 会自动识别 Job Object，macOS 需显式指定）；DuckDB 可用 db.engine.duckdb.memory_limit 限制其自身内存"
 		return te
 	}
 	te = types.Errorf(types.CodeExec, "%s", err.Error())

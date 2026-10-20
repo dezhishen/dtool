@@ -13,12 +13,21 @@ concurrency:
   group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
+# 发布物包含 DuckDB（CGO），必须由各平台原生 runner 构建：
+#   linux/amd64    ubuntu-26.04
+#   linux/arm64    ubuntu-26.04-arm
+#   darwin/amd64   macos-26（同一台机器按 -arch 构建）
+#   darwin/arm64   macos-26
+#   windows/amd64  windows-2025（MSYS2 gcc）
+# DuckDB 没有 windows/arm64 预编译库，该平台不再随发布提供。
 jobs:
-  release:
+  info:
     runs-on: ubuntu-26.04
-    env:
-      CGO_ENABLED: "0"
-      GH_TOKEN: ${{ github.token }}
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      prev: ${{ steps.info.outputs.prev }}
+      kind: ${{ steps.info.outputs.kind }}
+      prerelease: ${{ steps.info.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,20 +56,95 @@ jobs:
               || { echo "预览版/正式版必须打在 main 上"; exit 1; }
           fi
 
-      - name: 测试
-        run: go test ./...
+      - name: 测试（含 DuckDB 后端）
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./...
+          make scripts-test
 
-      - name: 构建产物
-        run: make release-build VERSION="${{ steps.info.outputs.version }}"
+  build:
+    needs: info
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-26.04
+            name: linux-amd64
+            target: linux/amd64
+          - os: ubuntu-26.04-arm
+            name: linux-arm64
+            target: linux/arm64
+          - os: macos-26
+            name: darwin-amd64
+            target: darwin/amd64
+          - os: macos-26
+            name: darwin-arm64
+            target: darwin/arm64
+          - os: windows-2025
+            name: windows-amd64
+            target: windows/amd64
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # ldflags 里的 git describe 需要 tag 与历史
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Windows：把 MSYS2 gcc 加进 PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gcc = "C:\msys64\ucrt64\bin"
+          if (-not (Test-Path "$gcc\gcc.exe")) { throw "未找到 $gcc\gcc.exe" }
+          $gcc | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: 构建并打包 ${{ matrix.target }}
+        run: bash scripts/build-release.sh "${{ needs.info.outputs.version }}" "${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dtool-${{ matrix.name }}
+          path: dist/dtool_*
+          if-no-files-found: error
+
+  publish:
+    needs: [info, build]
+    runs-on: ubuntu-26.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 生成 checksums.txt
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(dist/*.tar.gz dist/*.zip)
+          ((${#archives[@]})) || { echo "没有下载到任何产物" >&2; exit 1; }
+          (cd dist && sha256sum "${archives[@]##*/}") > dist/checksums.txt
+          cat dist/checksums.txt
 
       - name: 生成 Release 说明（PR + commits）
         run: |
-          bash scripts/release-notes.sh "$GITHUB_REF_NAME" "${{ steps.info.outputs.prev }}" "$GITHUB_REPOSITORY" > notes.md
+          bash scripts/release-notes.sh "$GITHUB_REF_NAME" "${{ needs.info.outputs.prev }}" "$GITHUB_REPOSITORY" > notes.md
           cat notes.md
 
       - name: 创建/更新 Release
         env:
-          PRERELEASE: ${{ steps.info.outputs.prerelease }}
+          PRERELEASE: ${{ needs.info.outputs.prerelease }}
         run: |
           flags=()
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease --latest=false); fi

@@ -30,7 +30,7 @@ func newQueryCmd() *cobra.Command {
 	var rowsFlag bool
 	c := &cobra.Command{
 		Use:   "query",
-		Short: "用 SQL 查询数据集或 JSON 文件（内存 SQLite）",
+		Short: "用 SQL 查询数据集或 JSON 文件（SQLite / DuckDB 引擎）",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := requireFlags(c, "sql"); err != nil {
 				return err

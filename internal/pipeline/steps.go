@@ -37,6 +37,10 @@ type Env struct {
 	Store     string
 	MemPolicy string
 	PlanFile  string
+	// Engine 传给查询的后端名（auto / 已注册引擎，见 query.ResolveEngine）；
+	// EngineOpts 是该后端在配置文件 db.engine.<name> 下的全部配置。
+	Engine     string
+	EngineOpts map[string]any
 }
 
 // Excel 转换的内存预估（流式转换后实测：13KB→18.5MB、7.4MB→47MB、17.8MB→76MB，
@@ -337,7 +341,8 @@ func (e *Env) Query(p QueryParams, parentID string) (*types.QueryResult, error) 
 		r, err := query.Run(e.Ctx, query.Options{SQL: p.SQL, Sources: sources,
 			Roots: []string{e.WS.Root, cwd}, Lookup: (&dataset.Store{WS: e.WS}).Lookup,
 			Sandbox: p.Sandbox, MaxRows: p.MaxRows, Timeout: p.Timeout, MaxMemory: e.MaxMemory,
-			LoadMode: e.LoadMode, Store: e.Store, MemPolicy: e.MemPolicy, PlanFile: e.PlanFile})
+			LoadMode: e.LoadMode, Store: e.Store, MemPolicy: e.MemPolicy, PlanFile: e.PlanFile,
+			EngineName: e.Engine, EngineOpts: e.EngineOpts})
 		if err != nil {
 			return nil, err
 		}

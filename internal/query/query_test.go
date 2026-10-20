@@ -236,7 +236,7 @@ func TestEmptyResultIsNonNil(t *testing.T) {
 // 要翻译成「发生了什么 + 怎么办」，而不是把驱动原文抛给用户。
 func TestSQLiteNOMEMExplained(t *testing.T) {
 	raw := errors.New("载入 access_log_1m.json: out of memory (7)")
-	err := wrapErr(context.Background(), Options{}, raw, "load")
+	err := wrapErr(context.Background(), Options{}, DefaultEngine, raw, "load")
 	var te *types.Error
 	if !errors.As(err, &te) || te.Code != types.CodeExec {
 		t.Fatalf("err = %v", err)
@@ -246,7 +246,7 @@ func TestSQLiteNOMEMExplained(t *testing.T) {
 	}
 
 	// 普通错误不该被误判
-	other := wrapErr(context.Background(), Options{}, errors.New("SQL logic error: no such column: x (1)"), "query")
+	other := wrapErr(context.Background(), Options{}, DefaultEngine, errors.New("SQL logic error: no such column: x (1)"), "query")
 	if strings.Contains(other.Error(), "内存不足") {
 		t.Fatalf("普通错误被误判为 NOMEM：%v", other)
 	}

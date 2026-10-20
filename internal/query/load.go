@@ -22,7 +22,7 @@ type Binding struct {
 	Path string
 }
 
-// LoadMode 决定 JSON 装入内存 SQLite 的方式。
+// LoadMode 决定 JSON 装入查询后端的方式。
 type LoadMode string
 
 const (
@@ -102,12 +102,13 @@ func PreviewPlan(loadMode, store, memPolicy string, mem memguard.Memory, planFil
 
 func ident(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
-// loadTable 按模式把 JSON 数组文件载入内存库的一张表。
-func loadTable(ctx context.Context, db *sql.DB, b Binding, mode LoadMode) error {
+// loadTable 按模式把 JSON 数组文件载入查询后端的一张表。
+// 列类型由 eng.SQLType 翻译成具体方言的声明，装入器只产出与引擎无关的 TypeKind。
+func loadTable(ctx context.Context, eng Engine, db *sql.DB, b Binding, mode LoadMode) error {
 	if mode == LoadStream {
-		return loadStream(ctx, db, b)
+		return loadStream(ctx, eng, db, b)
 	}
-	return loadFull(ctx, db, b)
+	return loadFull(ctx, eng, db, b)
 }
 
 // rowKV 保持 JSON 对象内的键顺序（map 会丢顺序，列顺序必须稳定）。
@@ -204,19 +205,19 @@ func (c *colStat) observe(v any) {
 	}
 }
 
-func (c *colStat) sqlType() string {
+func (c *colStat) kind() TypeKind {
 	switch {
 	case c.seen && c.isInt:
-		return "INTEGER"
+		return KindInteger
 	case c.seen && c.isNum:
-		return "REAL"
+		return KindReal
 	default:
-		return "TEXT"
+		return KindText
 	}
 }
 
 // loadStream 两遍流式载入：第一遍推断列与类型，第二遍写入，峰值内存与文件大小基本无关。
-func loadStream(ctx context.Context, db *sql.DB, b Binding) error {
+func loadStream(ctx context.Context, eng Engine, db *sql.DB, b Binding) error {
 	var cols []string
 	stats := map[string]*colStat{}
 	err := streamArray(ctx, b.Path, func(_ int, row []rowKV) error {
@@ -237,13 +238,13 @@ func loadStream(ctx context.Context, db *sql.DB, b Binding) error {
 	if len(cols) == 0 {
 		cols = []string{"_empty"}
 	}
-	ctypes := make([]string, len(cols))
+	kinds := make([]TypeKind, len(cols))
 	idx := make(map[string]int, len(cols))
 	for i, c := range cols {
-		ctypes[i] = stats[c].sqlType()
+		kinds[i] = stats[c].kind()
 		idx[c] = i
 	}
-	if err := createTable(ctx, db, b.Name, cols, ctypes); err != nil {
+	if err := createTable(ctx, eng, db, b.Name, cols, kinds); err != nil {
 		return err
 	}
 	tx, err := db.BeginTx(ctx, nil)
@@ -263,7 +264,7 @@ func loadStream(ctx context.Context, db *sql.DB, b Binding) error {
 		}
 		for _, kv := range row {
 			if i, ok := idx[kv.key]; ok {
-				args[i] = sqlValue(kv.val, ctypes[i])
+				args[i] = sqlValue(kv.val, kinds[i])
 			}
 		}
 		_, err := stmt.ExecContext(ctx, args...)
@@ -282,18 +283,18 @@ func insertSQL(name string, n int) string {
 	return fmt.Sprintf("INSERT INTO %s VALUES (%s)", ident(name), strings.Join(marks, ","))
 }
 
-func createTable(ctx context.Context, db *sql.DB, name string, cols, ctypes []string) error {
+func createTable(ctx context.Context, eng Engine, db *sql.DB, name string, cols []string, kinds []TypeKind) error {
 	defs := make([]string, len(cols))
 	for i, c := range cols {
-		defs[i] = ident(c) + " " + ctypes[i]
+		defs[i] = ident(c) + " " + eng.SQLType(kinds[i])
 	}
 	_, err := db.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (%s)", ident(name), strings.Join(defs, ", ")))
 	return err
 }
 
-// columnTypes 整块解析用：按整列推断类型。
-func columnTypes(cols []string, rows []types.Row) []string {
-	out := make([]string, len(cols))
+// columnKinds 整块解析用：按整列推断类型。
+func columnKinds(cols []string, rows []types.Row) []TypeKind {
+	out := make([]TypeKind, len(cols))
 	for i, c := range cols {
 		isInt, isNum, seen := true, true, false
 		for _, r := range rows {
@@ -320,32 +321,32 @@ func columnTypes(cols []string, rows []types.Row) []string {
 		}
 		switch {
 		case seen && isInt:
-			out[i] = "INTEGER"
+			out[i] = KindInteger
 		case seen && isNum:
-			out[i] = "REAL"
+			out[i] = KindReal
 		default:
-			out[i] = "TEXT"
+			out[i] = KindText
 		}
 	}
 	return out
 }
 
-func sqlValue(v any, typ string) any {
+func sqlValue(v any, kind TypeKind) any {
 	switch x := v.(type) {
 	case nil:
 		return nil
 	case json.Number:
-		switch typ {
-		case "INTEGER":
+		switch kind {
+		case KindInteger:
 			n, _ := strconv.ParseInt(string(x), 10, 64)
 			return n
-		case "REAL":
+		case KindReal:
 			f, _ := strconv.ParseFloat(string(x), 64)
 			return f
 		}
 		return string(x)
 	case bool:
-		if typ == "TEXT" {
+		if kind == KindText {
 			return strconv.FormatBool(x)
 		}
 		return boolInt(x)
@@ -408,7 +409,7 @@ func decodeRows(ctx context.Context, r io.Reader, name string) ([]types.Row, err
 }
 
 // loadFull 整块解析：读入整个文件并反序列化为行切片后再插入（快，但峰值内存约 13 倍文件大小）。
-func loadFull(ctx context.Context, db *sql.DB, b Binding) error {
+func loadFull(ctx context.Context, eng Engine, db *sql.DB, b Binding) error {
 	f, err := os.Open(b.Path)
 	if err != nil {
 		return types.Errorf(types.CodeNotFound, "source not found: %s", b.Path)
@@ -431,8 +432,8 @@ func loadFull(ctx context.Context, db *sql.DB, b Binding) error {
 	if len(cols) == 0 {
 		cols = []string{"_empty"}
 	}
-	ctypes := columnTypes(cols, rows)
-	if err := createTable(ctx, db, b.Name, cols, ctypes); err != nil {
+	kinds := columnKinds(cols, rows)
+	if err := createTable(ctx, eng, db, b.Name, cols, kinds); err != nil {
 		return err
 	}
 	tx, err := db.BeginTx(ctx, nil)
@@ -449,7 +450,7 @@ func loadFull(ctx context.Context, db *sql.DB, b Binding) error {
 	for _, r := range rows {
 		for i, c := range cols {
 			v, _ := r.Get(c)
-			args[i] = sqlValue(v, ctypes[i])
+			args[i] = sqlValue(v, kinds[i])
 		}
 		if _, err := stmt.ExecContext(ctx, args...); err != nil {
 			return err

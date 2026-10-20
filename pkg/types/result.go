@@ -95,6 +95,9 @@ type QueryResult struct {
 	ResultFile string   `json:"result_file,omitempty"`
 	OutputFile string   `json:"output_file,omitempty"`
 	ActionID   string   `json:"action_id,omitempty"`
+	// Engine 是本次实际使用的查询后端（sqlite / duckdb …）。不同引擎的函数与类型
+	// 行为不同，排查「这条 SQL 为什么结果不一样」时先看它。
+	Engine string `json:"engine,omitempty"`
 	// Strategy 是本次实际使用的执行档（如 full+memory / stream+disk），
 	// StrategyNote 说明为什么是这一档（预算、阈值、历史成功率、是否被强制指定）。
 	// AI 读它就知道「这次为什么慢/为什么换了档」。

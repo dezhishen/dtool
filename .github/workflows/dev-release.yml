@@ -5,12 +5,12 @@ name: Dev Release
 #   dispatch  手动触发（Actions 页面 Run workflow，或 `gh workflow run dev-release.yml`），
 #             force=true 可忽略 commit 校验强制重发（例如资产损坏、想立刻要一个构建）
 #
-# **刻意不挂 push**：每次 push 都跑六平台构建 + 覆盖上传 ~50MB 资产，属于把 CI 和 Release
-# 当流水账；也正好让下面的 commit 校验失效（push 时 commit 必然是新的）。要「push 完立刻有
-# dev」就直接手动触发一次。
+# **刻意不挂 push**：每次 push 都跑五平台 CGO 构建 + 覆盖上传，属于把 CI 和 Release
+# 当流水账；也正好让下面的 commit 校验失效（push 时 commit 必然是新的）。要「push
+# 完立刻有 dev」就直接手动触发一次。
 #
-# 两种触发都先做 **commit 校验**：dev-build.txt 里记着上次发布的 commit，与当前一致就跳过
-# 构建与上传（定时触发十有八九命中这条），避免无意义地滚动构建号、刷 Release 时间。
+# 两种触发都先做 **commit 校验**：dev-build.txt 里记着上次发布的 commit，与当前
+# 一致就跳过构建与上传（定时触发十有八九命中这条），避免无意义地滚动构建号、刷 Release 时间。
 # 之所以能这么省：dev 的语义是「main 的最近一次构建」，commit 没变就没有新东西可发。
 on:
   schedule:
@@ -29,13 +29,15 @@ concurrency:
   group: dev-release
   cancel-in-progress: false # 发布要串行，不能互相打断（否则可能出现半覆盖的资产）
 
+# 发布物含 DuckDB（CGO），由原生 runner 矩阵构建（见 release.yml 的平台说明）。
 jobs:
-  dev-release:
+  decide:
     runs-on: ubuntu-26.04
     env:
-      CGO_ENABLED: "0"
       GH_TOKEN: ${{ github.token }}
-      DEV_VERSION: dev-${{ github.run_id }}
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      reason: ${{ steps.decide.outputs.reason }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,18 +71,92 @@ jobs:
           [[ "$FORCE" == "true" ]] && args+=(--force)
           bash scripts/dev-release-decision.sh "${args[@]}" | tee -a "$GITHUB_OUTPUT"
 
-      - name: 测试
-        if: steps.decide.outputs.release == 'true'
+  test:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    runs-on: ubuntu-26.04
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: 测试（含 DuckDB 后端）
         run: |
           go test ./...
           make scripts-test
 
-      - name: 构建全部平台
-        if: steps.decide.outputs.release == 'true'
-        run: make release-build VERSION="$DEV_VERSION"
+  build:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-26.04
+            name: linux-amd64
+            target: linux/amd64
+          - os: ubuntu-26.04-arm
+            name: linux-arm64
+            target: linux/arm64
+          - os: macos-26
+            name: darwin-amd64
+            target: darwin/amd64
+          - os: macos-26
+            name: darwin-arm64
+            target: darwin/arm64
+          - os: windows-2025
+            name: windows-amd64
+            target: windows/amd64
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "1"
+      DEV_VERSION: dev-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Windows：把 MSYS2 gcc 加进 PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gcc = "C:\msys64\ucrt64\bin"
+          if (-not (Test-Path "$gcc\gcc.exe")) { throw "未找到 $gcc\gcc.exe" }
+          $gcc | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: 构建并打包 ${{ matrix.target }}
+        run: bash scripts/build-release.sh "$DEV_VERSION" "${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dtool-${{ matrix.name }}
+          path: dist/dtool_*
+          if-no-files-found: error
+
+  publish:
+    needs: [decide, test, build]
+    if: needs.decide.outputs.release == 'true'
+    runs-on: ubuntu-26.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEV_VERSION: dev-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: 冒烟：校验嵌入的版本与元数据
-        if: steps.decide.outputs.release == 'true'
         run: |
           set -euo pipefail
           mkdir -p /tmp/smoke && tar -xzf "dist/dtool_${DEV_VERSION}_linux_amd64.tar.gz" -C /tmp/smoke
@@ -96,7 +172,6 @@ jobs:
       # artifact 在**改名之前**上传：里面的文件名带 run id，下载多次不会撞名，
       # 也便于「按某次 action 的制品离线安装」（只保留 dev 一个 Release 时的兜底路径）。
       - uses: actions/upload-artifact@v7
-        if: steps.decide.outputs.release == 'true'
         with:
           name: dtool-${{ env.DEV_VERSION }}
           path: dist/dtool_*
@@ -104,12 +179,10 @@ jobs:
           retention-days: 14
 
       - name: 整理成滚动 dev 发布的资产
-        if: steps.decide.outputs.release == 'true'
         # 逻辑在 scripts/dev-release-assets.sh（单测：scripts/tests/dev-release-assets.test.sh）
         run: BUILD_ID="$GITHUB_RUN_ID" COMMIT="$GITHUB_SHA" bash scripts/dev-release-assets.sh dist "$DEV_VERSION"
 
       - name: 更新滚动 dev 发布（tag dev）
-        if: steps.decide.outputs.release == 'true'
         run: |
           set -euo pipefail
           # 说明正文交给脚本生成（有单测）：以前写在 $(printf '...' \ 续行里，
@@ -131,6 +204,6 @@ jobs:
             echo ""
             echo "- 触发：\`$GITHUB_EVENT_NAME\`"
             echo "- commit：\`$GITHUB_SHA\`"
-            echo "- 决策：${{ steps.decide.outputs.reason }}"
-            echo "- 发布：${{ steps.decide.outputs.release }}"
+            echo "- 决策：${{ needs.decide.outputs.reason }}"
+            echo "- 发布：${{ needs.decide.outputs.release }}"
           } >> "$GITHUB_STEP_SUMMARY"

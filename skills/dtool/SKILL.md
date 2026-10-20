@@ -5,11 +5,11 @@ description: 本地数据 Pipeline CLI（默认强隐私：结果只落盘，std
 
 # dtool 使用指南（Agent Skill 正文）
 
-单二进制、无外部依赖。所有命令的 **stdout 都是结构化 JSON**，失败时 stdout 仍输出错误 JSON、退出码非 0，人类可读信息写 stderr。
+单二进制，内置 SQLite 与 DuckDB 两个查询引擎（`--engine` 切换）。所有命令的 **stdout 都是结构化 JSON**，失败时 stdout 仍输出错误 JSON、退出码非 0，人类可读信息写 stderr。
 
 ## 安装与升级
 
-单二进制、无外部依赖（Linux/macOS/Windows × amd64/arm64）。从 Releases 下载对应平台的包，解包后即可用：
+单二进制（Linux amd64/arm64、macOS amd64/arm64、Windows amd64）。从 Releases 下载对应平台的包，解包后即可用：
 
 | 平台 | 包名 |
 |------|------|
@@ -102,24 +102,24 @@ dtool pipeline --input dataset:sales --sql 'SELECT ... FROM data'   # 复用已�
 | `actions results list\|stat\|verify\|gc` | 结果集管理（只处理 `output.files` 元数据）：`list` 枚举、`stat` 统计、`verify` 校验存在/哈希、`gc` 默认 dry-run（`--apply` 才删除；只动工作区 `outputs/`，外部输出/被引用结果/`--keep-last` 受保护） |
 | `actions show <id> [--full] \| output <id> \| trace <id> \| annotate <id> --text ... --by ai-agent \| export \| reindex \| sync` | `show` 默认不输出 `output.preview`；`--full` / `output` **仅 normal 可用**（strong 下 code 6）；`export` 在 strong 下自动剥掉 preview；`annotate` 写用户口径/备注；`sync` 收敛状态 |
 | `deliver <id>` | 只返回产物清单（`path`/`abs_path`/`mime`/`bytes`/`sha256` + `send` 提示），不读内容；strong 下也可用 |
-| `--store auto\|memory\|disk` | SQLite 库落在哪：auto（按预算选档）/ memory（快）/ disk（峰值最低） |
+| `--store auto\|memory\|disk` | 查询库落在哪（SQLite / DuckDB 通用）：auto（按预算选档）/ memory（快）/ disk（峰值最低） |
 | `--mem-policy try\|strict` | 所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败 |
 | `-c, --config f.yaml` | 配置文件（YAML：font / workspace / preview_rows / privacy 等）；命令行参数优先 |
 | `--sandbox` | 默认开启：SQL 只允许单条 SELECT，且只能读工作区 / 当前目录 / `--source` 文件；`--sandbox=false` 关闭 |
 | `--update [--pre]` / `upgrade [--version V] [--pre] [--skills[=路径]]` | 检查更新 / 升级自身；`--skills` 顺带另存该版本的 SKILL.md（目录 / `.md` 文件 / 裸写法=当前目录）；网络瞬断自动重试 3 次（指数退避），失败时 hint 给出 Releases 页面，见文末 |
 
-通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`（Action 落盘的预览行数，默认 20，不影响 stdout）、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
+通用参数：`--tags a,b`、`--notes`、`--from <ref>`、`--preview-rows N`（Action 落盘的预览行数，默认 20，不影响 stdout）、`--no-record`（不记录、不可被引用）、`--load-mode auto|stream|full`、`--engine auto|sqlite|duckdb`（查询后端；每个二进制都内置两种引擎）、`--max-memory 2G`（`0` 关闭检查）、`-c config.yaml`。
 
 ## SQL 规则（最常踩坑）
 
 - 表名：**数据集名**、`--source 别名=引用` 的别名，或**双引号/反引号**包裹的文件路径。**单引号无效**（那是字符串）。含中文/特殊字符的列名用双引号：`SUM("销量")`。
-- 引擎是内存 SQLite：数值列按**整列**推断类型，`WHERE amount > 60`、`ORDER BY` 按数值比较；日期是 `TEXT`（ISO 格式），用 `date()` 等函数或字符串比较。
+- 默认引擎是内存 SQLite（`--engine duckdb` 换 DuckDB）：数值列按**整列**推断类型，`WHERE amount > 60`、`ORDER BY` 按数值比较；日期是 `TEXT`（ISO 格式），用 `date()` 等函数或字符串比较。
 - 沙箱默认开启：只允许单条 `SELECT`/`WITH`；文件只能来自工作区、当前目录或 `--source`。不要尝试 `PRAGMA`/`ATTACH`/多语句。
 - 结果过大会报错（`--max-rows`，默认 10000）：加 `LIMIT` 或先聚合。
 
 ## 连表查询（JOIN）
 
-同一个内存 SQLite 里**每个数据源 = 一张表**，任意 JOIN 都能写。表名解析顺序：
+同一个查询库里**每个数据源 = 一张表**，任意 JOIN 都能写。表名解析顺序：
 
 1. `--source 别名=引用` 的别名（引用可为 `dataset:<名>` / `action:<id>` / `latest:<type>` / 文件路径）
 2. FROM 位置上的**数据集名**（无需 `--source`）
@@ -148,7 +148,7 @@ dtool query --source o=dataset:orders --source c=.dtool/datasets/customers/data.
 - **JOIN 键的类型**：列类型是**整列推断**的结果。带前导零或 >15 位的 ID 会保持 `TEXT`
   （如示例的 `客户ID`），两边都用字符串比较；类型不一致时用 `CAST(x AS TEXT)` 显式对齐。
 - **NULL 语义**：`LEFT JOIN` 未匹配的一侧是 NULL，统计个数要用 `COUNT(o.列)`，不要用 `COUNT(*)`。
-- **内存**：参与 JOIN 的每张表都要装进内存 SQLite，用量是各源之和（`--load-mode` 对每个源分别生效）。
+- **内存**：参与 JOIN 的每张表都要装进查询库，用量是各源之和（`--load-mode` 对每个源分别生效）。
 - **结果体积**：`--max-rows`（默认 10000）会拦截大结果，先聚合或加 `LIMIT`；要全量就 `--max-rows 0`
   或 `--format xlsx --output`。
 - 写 SQL 前先 `dtool datasets show <name>` 看列名与类型；表名拼错会提示「用 `--source` 绑定或把路径用双引号包裹」。
@@ -202,6 +202,11 @@ stdout 错误 JSON：`{"error","detail","hint","code","action_id"}`。退出码�
 font: /usr/share/fonts/truetype/arphic/uming.ttc   # 相对路径相对配置文件，支持 ~/
 workspace: .dtool
 preview_rows: 20
+engine: auto      # 查询后端：auto（默认 sqlite）/ 已注册引擎名
+db:
+  engine:         # 各后端的配置（整棵子树交给后端，拼错键会直接报错）
+    sqlite:
+      cache_size_kb: 8192
 privacy: strong   # 默认；只有用户本人可改成 normal
 ```
 
@@ -209,7 +214,7 @@ privacy: strong   # 默认；只有用户本人可改成 normal
 
 ## 装入方式与大数据的现实边界
 
-JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `stream` / `full`。
+JSON → 查询库有两种装入方式：`--load-mode auto`（默认）/ `stream` / `full`。
 
 - `auto`（默认）按**内存预算**选档，不用自己算：① 输入 <32MB 且整块解析预计峰值 ≤ 预算 80% →
   `full` + 内存库；② 否则整块解析峰值 ≤ 预算 → `stream` + 内存库；③ 再不行 → `stream` +
@@ -225,7 +230,7 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
   别用 `--max-memory 0` 硬扛远超内存的输入——那等于关掉看门狗，撞墙时会是被内核杀掉而不是可读报错。
 - 早期 1H2G 实测（默认 `auto`）：10 万行 2.4s；100 万行 19–29s；500 万行 1:29、604MB。
 - **Excel（`convert`）也是流式的**：两阶段、单次解析，峰值 ≈ 32MB + 文件 × 3（实测 7.4MB/15 万行 → 47MB，17.8MB/40 万行 → 74MB，**37.7MB/105 万行（Excel 行数上限）→ 55MB**），与行数无关——
-所以 xlsx 的边界是 Excel 的格式上限（单表 1,048,576 行），不是内存。它没有、也不需要 `--load-mode`——那组开关选的是 JSON → 内存 SQLite 的装入方式，只对 `query` 生效。预检按「32MB + 文件 × 6」估算，超出预算才会在转换前拦下并给出数字与退出口。
+所以 xlsx 的边界是 Excel 的格式上限（单表 1,048,576 行），不是内存。它没有、也不需要 `--load-mode`——那组开关选的是 JSON → 查询库的装入方式，只对 `query` 生效。预检按「32MB + 文件 × 6」估算，超出预算才会在转换前拦下并给出数字与退出口。
 - `--timeout` 只约束**查询阶段**（默认 60s），载入耗时不计入。若内存充足、只想要速度，可用 `--load-mode full`（只解析一遍，更快）。
 - 内存不足时会**快速失败并说明原因**（含「预计需 xx、可用 xx」与 `--max-memory 0` 退出口），不会静默被杀；这类失败同样留下 `failed` 的 Action。处置建议按场景给：`query` 能切 `--load-mode stream`（整块解析峰值 ≈ 文件 × 13）；`convert` 没有开关可切，只能缩小输入（拆文件、裁列）或放宽预算——把 `--load-mode` 发给它不报错也不生效（CLI 会在 stderr 提示「已忽略」）。
 - 看到 stderr 的「载入 xxx.json（…，流式解析，预计需约 xx 内存）...」说明正在载入；若进程随后消失，就是内存不够。
@@ -262,7 +267,7 @@ JSON → 内存 SQLite 有两种装入方式：`--load-mode auto`（默认）/ `
 - 预算来源随平台不同：Linux 读 cgroup/系统可用内存，Windows 读 **Job Object 内存上限**
   （`0x100` 进程级 / `0x2000` job 级，两者都设时取小值；存在即生效），
   其他平台（如 macOS）**不自动探测**——拿不到预算时预检与看门狗都不工作，所以容器/受限环境里请显式给
-  `--max-memory`。顶到外部硬上限时可能看到「内存不足：…SQLite 分配失败」（code 4，含 hint），
+  `--max-memory`。顶到外部硬上限时可能看到「内存不足：… 引擎分配失败」（code 4，含 hint），
   极端情况下是 Go 的 `fatal error: out of memory`（不可恢复）——后者只会在没有预算可比对时发生。
 - `dtool meminfo` 的 `warnings` 是结论式的：Windows 上读不到 Job Object 上限时它会说
   「预算回落到系统可用内存，请用 `--max-memory`」——**看到这句就别相信 `budget` 里的数字**，
@@ -323,7 +328,7 @@ dtool upgrade --skills=~/.claude/skills/dtool/SKILL.md   # 直接装成平台技
 想升到 dev：`dtool upgrade --channel dev`；`--version dev` 也可以（滚动发布**只保留最新一次**，
 `--version dev-<历史 run id>` 会被拒绝——要装特定构建请用那次 workflow 的 artifact）。
 dev 构建由 CI **每 4 小时**定时更新（也可在 Actions 页面手动触发；刻意不挂 push，免得每次提交都跑一轮
-六平台构建），commit 未变则跳过。
+五平台构建），commit 未变则跳过。
 `dev` 是移动 tag，已在版本号与发版基线计算中排除——本地构建不会因此变成 dev 渠道。
 `--version` 与 `--pre` 不能同时使用；`--version` 与 `--channel` 也不能同时使用。Windows 下运行中的 `dtool.exe` 会被改名为 `.old`，新文件改名就位，下次启动自动清理；若提示文件被占用，请关闭其他 dtool 进程后重试。无写权限时在 Linux/macOS 用 `sudo`，Windows 用管理员。GitHub 限流时设置 `GITHUB_TOKEN`。
 

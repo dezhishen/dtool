@@ -861,3 +861,55 @@ func TestVisualizeMissing(t *testing.T) {
 		}
 	}
 }
+
+// --engine 按名字选择查询后端：名字写错在启动时就报参数错误（别等 SQL 跑到一半），
+// 名字正确时结果里带上实际后端，方便 AI 与排查确认「这条 SQL 是谁执行的」。
+func TestEngineFlagSelectsBackend(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	m, err := run(t, "--engine", "nope", "datasets", "list")
+	if err == nil {
+		t.Fatal("未注册的 --engine 应报错")
+	}
+	if code, _ := m["code"].(float64); code != 2 {
+		t.Fatalf("未知引擎应为参数错误 code=2，实际 %v", m["code"])
+	}
+
+	m, err = run(t, "--engine", "sqlite", "query", "--sql", "SELECT 1 AS n", "--rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m["engine"] != "sqlite" {
+		t.Fatalf("结果应记录实际后端 sqlite，实际 %v", m["engine"])
+	}
+}
+
+// 配置文件的 db.engine.<name> 子树要落到后端初始化回调：拼错键名在启动时就报错，
+// 正确键名则正常执行。
+func TestEngineConfigFromFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "engine.yaml")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("privacy: normal\ndb:\n  engine:\n    sqlite:\n      cache_size_kb: 4096\n")
+	if _, err := run(t, "-c", cfg, "query", "--sql", "SELECT 1 AS n", "--rows"); err != nil {
+		t.Fatalf("合法后端配置应可执行：%v", err)
+	}
+
+	write("privacy: normal\ndb:\n  engine:\n    sqlite:\n      cach_size_kb: 4096\n")
+	m, err := run(t, "-c", cfg, "datasets", "list")
+	if err == nil {
+		t.Fatal("拼错的配置键应在启动时报错")
+	}
+	if code, _ := m["code"].(float64); code != 2 {
+		t.Fatalf("配置错误应为参数错误 code=2，实际 %v", m["code"])
+	}
+	if hint, _ := m["hint"].(string); !strings.Contains(hint, "db.engine.sqlite") {
+		t.Fatalf("hint 应指出配置位置，实际 %q", hint)
+	}
+}

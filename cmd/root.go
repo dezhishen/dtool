@@ -32,6 +32,8 @@ type globalFlags struct {
 	store       string
 	memPolicy   string
 	loadMode    string
+	engine      string
+	engineOpts  map[string]any
 }
 
 // parsedMaxMemory 为 --max-memory 的解析结果：nil 表示自动探测。
@@ -69,8 +71,11 @@ func Execute(version string) error {
 	pf.BoolVar(&g.noRecord, "no-record", false, "跳过 Action 记录")
 	pf.StringVar(&g.maxMemory, "max-memory", "", "内存预算（如 1.5G）；默认自动探测 cgroup/系统可用内存，0 表示关闭检查")
 	pf.StringVar(&g.loadMode, "load-mode", "auto", "JSON 装入方式：auto 按内存预算选执行档（快到省）/ stream 流式（省内存）/ full 整块解析（快，要求更多余量）")
-	pf.StringVar(&g.store, "store", "auto", "SQLite 库落在哪：auto 按内存预算自适应 / memory 内存库（快）/ disk 磁盘库（峰值低，硬上限下更稳）")
+	pf.StringVar(&g.store, "store", "auto", "查询库落在哪（SQLite / DuckDB 通用）：auto 按内存预算自适应 / memory 内存库（快）/ disk 磁盘库（峰值低，硬上限下更稳）")
 	pf.StringVar(&g.memPolicy, "mem-policy", "try", "所有档都预计超预算时：try 仍试最省档（失败记入 Action）/ strict 直接失败")
+	pf.StringVar(&g.engine, "engine", "auto", fmt.Sprintf(
+		"查询后端：auto（默认 %s）/ 已注册：%s", query.DefaultEngineName,
+		strings.Join(query.EngineNames(), " / ")))
 
 	var checkUpdate, pre bool
 	var channel string
@@ -162,6 +167,7 @@ func newEnv(ctx context.Context) (*pipeline.Env, error) {
 		Meta:    action.Metadata{Tags: tags, Notes: g.notes},
 		Preview: g.previewRows, NoRecord: g.noRecord, Command: commandLine(), MaxMemory: parsedMaxMemory,
 		LoadMode: g.loadMode, Store: g.store, MemPolicy: g.memPolicy,
+		Engine: g.engine, EngineOpts: g.engineOpts,
 		// --no-record 表示「不留痕迹」，选档历史也一并跳过
 		PlanFile: planFile(g.noRecord, g.workspace),
 	}, nil
@@ -188,19 +194,21 @@ func requireFlags(c *cobra.Command, names ...string) error {
 	return nil
 }
 
-// warnInertLoadMode 提前说明 --load-mode 的适用范围：它管的是 JSON → 内存 SQLite 的装入
-// （只有 query / pipeline 会用到）。发给 convert 这类命令时会被静静忽略，先说出来，
-// 免得用户以为「换个参数就能省内存」而白试一轮。
-func warnInertLoadMode(c *cobra.Command) {
-	if !c.Flags().Changed("load-mode") {
-		return
-	}
+// warnInertQueryFlags 提前说明 --load-mode / --engine 的适用范围：它们管的是
+// JSON 装入与查询（只有 query / pipeline 会用到）。发给 convert 这类命令时会被静静
+// 忽略，先说出来，免得用户以为「换个参数就能省内存 / 换引擎」而白试一轮。
+func warnInertQueryFlags(c *cobra.Command) {
 	switch c.Name() {
 	case "query", "pipeline":
 		return
 	}
-	fmt.Fprintf(c.ErrOrStderr(),
-		"注意：--load-mode 只对 JSON 装入（query / pipeline）生效，%s 不使用该参数，已忽略。\n", c.Name())
+	for _, name := range []string{"load-mode", "engine"} {
+		if !c.Flags().Changed(name) {
+			continue
+		}
+		fmt.Fprintf(c.ErrOrStderr(),
+			"注意：--%s 只对 JSON 装入与查询（query / pipeline）生效，%s 不使用该参数，已忽略。\n", name, c.Name())
+	}
 }
 
 func loadConfig(c *cobra.Command, _ []string) error {
@@ -209,6 +217,9 @@ func loadConfig(c *cobra.Command, _ []string) error {
 	privacyMode = config.PrivacyStrong
 	if g.loadMode == "" {
 		g.loadMode = "auto"
+	}
+	if g.engine == "" {
+		g.engine = query.AutoEngineName
 	}
 	if g.loadMode != "" {
 		m, err := query.ParseLoadMode(g.loadMode)
@@ -242,36 +253,59 @@ func loadConfig(c *cobra.Command, _ []string) error {
 		}
 		parsedMaxMemory = &n
 	}
-	warnInertLoadMode(c)
-	if g.config == "" {
-		return nil
-	}
-	cfg, err := config.Load(g.config)
-	if err != nil {
-		return err
-	}
-	cfgFont = cfg.Font
-	if cfg.LoadMode != "" && !c.Flags().Changed("load-mode") {
-		g.loadMode = cfg.LoadMode
-	}
-	if cfg.Store != "" && !c.Flags().Changed("store") {
-		g.store = cfg.Store
-	}
-	if cfg.MemPolicy != "" && !c.Flags().Changed("mem-policy") {
-		g.memPolicy = cfg.MemPolicy
-	}
-	if cfg.Workspace != "" && !c.Flags().Changed("workspace") {
-		g.workspace = cfg.Workspace
-	}
-	if cfg.PreviewRows > 0 && !c.Flags().Changed("preview-rows") {
-		g.previewRows = cfg.PreviewRows
-	}
-	if cfg.Privacy != "" {
-		p, err := config.ParsePrivacy(string(cfg.Privacy))
+	warnInertQueryFlags(c)
+	var cfg *config.Config
+	if g.config != "" {
+		var err error
+		cfg, err = config.Load(g.config)
 		if err != nil {
 			return err
 		}
-		privacyMode = p
+		cfgFont = cfg.Font
+		if cfg.LoadMode != "" && !c.Flags().Changed("load-mode") {
+			g.loadMode = cfg.LoadMode
+		}
+		if cfg.Store != "" && !c.Flags().Changed("store") {
+			g.store = cfg.Store
+		}
+		if cfg.MemPolicy != "" && !c.Flags().Changed("mem-policy") {
+			g.memPolicy = cfg.MemPolicy
+		}
+		if cfg.Engine != "" && !c.Flags().Changed("engine") {
+			g.engine = cfg.Engine
+		}
+		// db.engine 是更具体的写法（还能带上该后端的配置），优先于顶层 engine。
+		if cfg.DB.Engine.Name != "" && !c.Flags().Changed("engine") {
+			g.engine = cfg.DB.Engine.Name
+		}
+		if cfg.Workspace != "" && !c.Flags().Changed("workspace") {
+			g.workspace = cfg.Workspace
+		}
+		if cfg.PreviewRows > 0 && !c.Flags().Changed("preview-rows") {
+			g.previewRows = cfg.PreviewRows
+		}
+		if cfg.Privacy != "" {
+			p, err := config.ParsePrivacy(string(cfg.Privacy))
+			if err != nil {
+				return err
+			}
+			privacyMode = p
+		}
+	}
+	// 后端校验放在配置合并之后：命令行与配置文件两条来源都要在真正查询前报错，
+	// 别等到第一次 Open 才发现名字写错（也可能永远走不到 query，比如 convert）。
+	eng, err := query.ResolveEngine(g.engine)
+	if err != nil {
+		return err
+	}
+	g.engine = eng.Name() // 规范化：auto → 默认后端名，后面按它取配置
+	if cfg != nil {
+		// db.engine.<name> 下的整棵子树原样交给后端，键名由后端解释。
+		g.engineOpts = cfg.DB.Engine.For(g.engine)
+	}
+	// 用一次构建把配置也校验掉（实例丢弃；Run 会为自己的执行再建一个并配置）。
+	if _, err := query.BuildEngine(g.engine, g.engineOpts); err != nil {
+		return err
 	}
 	return nil
 }

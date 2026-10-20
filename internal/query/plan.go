@@ -1,11 +1,7 @@
 package query
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -145,57 +141,6 @@ func candidateList(ss []strategy) []memguard.Candidate {
 		out = append(out, s.Candidate)
 	}
 	return out
-}
-
-// storeDSN 生成连接串。
-//
-// 两处 pragma 都是有来历的（1 核 + cgroup，123MB / 70 万行，`GROUP BY <高基数列>`）：
-//
-//	journal_mode(OFF)+synchronous(OFF)  磁盘库是一次性产物，掉电丢失无所谓，省掉 fsync
-//	temp_store(FILE)                   **临时表必须落盘**：GROUP BY/ORDER BY 在没有索引时
-//	                                   要先排序，temp_store=MEMORY 会把排序器整个塞进内存
-//	                                   ——实测聚合段从 +5MB 涨到 +42MB，而磁盘库的加载段
-//	                                   本来只有 33MB，等于白省；改成 FILE 后总峰值
-//	                                   75MB → 52MB，耗时不变（1.78s vs 1.79s）。
-//	                                   这一条同时解释了 Windows 上「disk 档不降峰值」：
-//	                                   不是磁盘库没用，是排序器在内存里顶着。
-//	cache_size(-8000)                 页缓存 8MB（磁盘库），配合落盘的临时表把提交量压低
-func storeDSN(st Store, dbPath string) string {
-	if st == StoreDisk {
-		return "file:" + filepath.ToSlash(dbPath) +
-			"?_pragma=journal_mode(OFF)&_pragma=synchronous(OFF)&_pragma=temp_store(FILE)&_pragma=cache_size(-8000)"
-	}
-	return ":memory:?_pragma=temp_store(FILE)"
-}
-
-// openStore 打开装载用的数据库。磁盘库返回清理函数（关闭并删除临时文件）：
-// 刻意用系统临时目录而不是工作区——它是过程产物，不该留在 .dtool 里。
-func openStore(ctx context.Context, st Store) (*sql.DB, func(), error) {
-	dsn, dir := storeDSN(st, ""), ""
-	if st == StoreDisk {
-		d, err := os.MkdirTemp("", "dtool-load-")
-		if err != nil {
-			return nil, nil, types.Errorf(types.CodeGeneral, "创建临时目录失败：%v", err).
-				WithHint("磁盘库需要可写的临时目录（TMPDIR）；也可用 --store memory 换回内存库")
-		}
-		dir = d
-		dsn = storeDSN(st, filepath.Join(dir, "load.db"))
-	}
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		if dir != "" {
-			_ = os.RemoveAll(dir)
-		}
-		return nil, nil, err
-	}
-	db.SetMaxOpenConns(1) // 内存库按连接隔离；磁盘库同样保持单连接以免竞争
-	cleanup := func() {
-		_ = db.Close()
-		if dir != "" {
-			_ = os.RemoveAll(dir)
-		}
-	}
-	return db, cleanup, nil
 }
 
 // planNote 把选档结果翻成一行日志（DTOOL_DEBUG_MEMORY / 降级提示用）。

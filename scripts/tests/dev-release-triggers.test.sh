@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dev-release-triggers：dev 滚动发布**只允许**「定时 + 手动」两种触发
 #
-# 为什么要把这条钉死：dev 是滚动发布，一次触发的代价是六平台构建 + 覆盖上传整套资产。
+# 为什么要把这条钉死：dev 是滚动发布，一次触发的代价是五平台构建 + 覆盖上传整套资产。
 # 挂上 push 之后，每次提交都会跑一轮，而且会让 workflow 里的 commit 去重必然失效
 # （push 时 commit 总是新的）——「避免重复触发」的校验就白写了。要「推完立刻有 dev」，
 # 手动触发一次即可（gh workflow run dev-release.yml）。

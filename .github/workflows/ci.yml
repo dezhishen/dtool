@@ -1,6 +1,8 @@
 name: CI
 
-# 这里的职责是「校验」：测试 / lint / 交叉编译。
+# 这里的职责是「校验」：测试 / lint。
+# 唯一构建方式是 CGO=1：DuckDB 由 internal/query/duckdb.go 的 //go:build cgo 自动启用，
+# **每一个二进制都同时支持 sqlite 与 duckdb**；CGO_ENABLED=0 会编译失败。
 # 发版类的活儿在各自的工作流里，它们自己跑测试再发布：
 #   release.yml        打 tag 后发正式版/预览版
 #   dev-release.yml    每 4 小时 / 手动触发，更新滚动 dev 发布（commit 未变则跳过；刻意不挂 push）
@@ -25,17 +27,32 @@ jobs:
         os: [ubuntu-26.04, macos-26, windows-2025]
     runs-on: ${{ matrix.os }}
     env:
-      CGO_ENABLED: "0"
+      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Test
+      - name: Windows：把 MSYS2 gcc 加进 PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gcc = "C:\msys64\ucrt64\bin"
+          if (-not (Test-Path "$gcc\gcc.exe")) { throw "未找到 $gcc\gcc.exe" }
+          $gcc | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Test（sqlite + duckdb）
         run: go test ./...
+      - name: 发布打包冒烟（Linux）
+        if: runner.os == 'Linux'
+        # 走与 release.yml 相同的脚本：本平台构建 + notices + 打包 + checksums
+        run: |
+          bash scripts/build-release.sh ci linux/amd64
+          ls -lh dist
 
   lint:
     runs-on: ubuntu-26.04
+    env:
+      CGO_ENABLED: "1" # vet/tidy 也要看到 cgo 文件（DuckDB）
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -58,16 +75,3 @@ jobs:
       - name: 性能基准冒烟
         # 只跑一轮：确认基准本身可用（-benchtime 1x 不做耗时断言，避免 CI 抖动误报）
         run: go test -run '^$' -bench . -benchtime 1x ./internal/query/ ./internal/pipeline/
-
-  # PR 与 release/** 分支：只验证能交叉编译并打包
-  cross-build:
-    if: github.ref != 'refs/heads/main'
-    runs-on: ubuntu-26.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: 交叉编译（无 CGO）
-        run: make build-all release-build VERSION=ci
-

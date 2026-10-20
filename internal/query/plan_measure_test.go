@@ -95,7 +95,7 @@ func measureRung(t *testing.T, dsn string, mode LoadMode) {
 	ctx := context.Background()
 	before := vmHWM()
 	start := time.Now()
-	if err := loadTable(ctx, db, Binding{Name: "data", Path: path}, mode); err != nil {
+	if err := loadTable(ctx, DefaultEngine, db, Binding{Name: "data", Path: path}, mode); err != nil {
 		t.Fatalf("装入失败：%v", err)
 	}
 	elapsed := time.Since(start)
@@ -160,7 +160,7 @@ func TestMeasureAggregate(t *testing.T) {
 	db.SetMaxOpenConns(1)
 
 	ctx := context.Background()
-	if err := loadTable(ctx, db, Binding{Name: "data", Path: path}, LoadStream); err != nil {
+	if err := loadTable(ctx, DefaultEngine, db, Binding{Name: "data", Path: path}, LoadStream); err != nil {
 		t.Fatal(err)
 	}
 	afterLoad := vmHWM()
