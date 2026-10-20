@@ -122,30 +122,36 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Windows：准备 MSYS2 UCRT64 gcc
+      - name: Windows：缓存 WinLibs GCC 15 压缩包
         if: runner.os == 'Windows'
-        id: msys2
-        uses: msys2/setup-msys2@v2
+        uses: actions/cache@v4
         with:
-          msystem: UCRT64
-          install: mingw-w64-ucrt-x86_64-gcc
-      - name: Windows：固定 GCC 15（DuckDB 预编译库使用 emulated TLS）
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: |
-          # GCC 16 起 MinGW 默认改用原生 TLS，而 duckdb-go 的 windows 静态库仍引用
-          # __emutls_v._ZSt11__once_call（emulated TLS）。固定到最后的 emutls 版本 15.2.0。
-          pacman -U --noconfirm \
-            https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gcc-libs-15.2.0-14-any.pkg.tar.zst \
-            https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gcc-15.2.0-14-any.pkg.tar.zst
-          gcc --version | head -1
-      - name: Windows：把 UCRT64 gcc 加进 PATH
+          path: ${{ runner.temp }}/winlibs.7z
+          key: winlibs-gcc-15.2.0-ucrt-r7.7z
+      - name: Windows：安装 WinLibs GCC 15（DuckDB 静态库使用 emulated TLS）
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $gcc = Join-Path "${{ steps.msys2.outputs.msys2-location }}" "ucrt64\bin"
-          if (-not (Test-Path "$gcc\gcc.exe")) { throw "未找到 $gcc\gcc.exe（MSYS2 UCRT64 gcc 未安装成功）" }
-          $gcc | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # GCC 16 起 MinGW 默认改用原生 TLS，而 duckdb-go 的 windows 静态库仍引用
+          # __emutls_v._ZSt11__once_call（emulated TLS）。改用独立的 GCC 15.2.0 工具链：
+          # 既满足 emutls，又避免与 MSYS2 里 GCC 16 的拆分包（libgcc/libstdc++）冲突。
+          $ver = "15.2.0posix-14.0.0-ucrt-r7"
+          $archive = "winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-14.0.0-r7.7z"
+          $url = "https://github.com/brechtsanders/winlibs_mingw/releases/download/$ver/$archive"
+          $dir = Join-Path $env:RUNNER_TEMP "winlibs"
+          $bin = Join-Path $dir "mingw64\bin"
+          if (-not (Test-Path (Join-Path $bin "gcc.exe"))) {
+            $file = Join-Path $env:RUNNER_TEMP "winlibs.7z"
+            & curl.exe -sSL --fail -o $file $url
+            if ($LASTEXITCODE -ne 0) { throw "下载 WinLibs 失败：$url" }
+            $7z = "C:\Program Files\7-Zip\7z.exe"
+            if (-not (Test-Path $7z)) { throw "缺少 7-Zip，无法解压 $archive" }
+            & $7z x $file "-o$dir" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "解压 WinLibs 失败：$archive" }
+          }
+          if (-not (Test-Path (Join-Path $bin "gcc.exe"))) { throw "WinLibs 解压失败：未找到 $bin\gcc.exe" }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & (Join-Path $bin "gcc.exe") --version | Select-Object -First 1
 
       - name: 构建并打包 ${{ matrix.target }}
         run: bash scripts/build-release.sh "$DEV_VERSION" "${{ matrix.target }}"

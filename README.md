@@ -396,6 +396,9 @@ make release-build # 当前平台发布包（含 DuckDB）+ checksums.txt -> dis
 make test          # CGO=1 go test ./...
 ```
 
+Windows 本地构建需要 **MinGW-w64 GCC 15**（DuckDB 的 Windows 预编译库使用 emulated TLS，
+GCC 16 起默认原生 TLS，链接会报 `__emutls_v` 未定义）；CI 使用 WinLibs GCC 15.2.0。
+
 **每个二进制都包含两种引擎**：DuckDB 由 `internal/query/duckdb.go` 的 `//go:build cgo`
 自动启用，所以 `CGO_ENABLED=1`（Go 的默认值）构建出的 `--engine sqlite|duckdb` 都可用，
 不需要 `-tags`。CGO 是唯一的构建方式：`CGO_ENABLED=0` 会在编译期失败并提示需要 CGO，

@@ -58,8 +58,10 @@
 
 - **默认与发布**（`make build` / `make release-build`）都是 `CGO_ENABLED=1`：DuckDB 由
   `internal/query/duckdb.go` 的 `//go:build cgo` 自动启用，**每个二进制都同时支持 sqlite
-  与 duckdb**，不需要 `-tags`。需要平台 C 工具链（Linux gcc / macOS Xcode CLT / Windows
-  MSYS2）。Linux/Windows 优先 `-extldflags=-static` 全静态链接（失败时回退动态并告警），
+  与 duckdb**，不需要 `-tags`。需要平台 C 工具链（Linux gcc / macOS Xcode CLT /
+  Windows MinGW-w64 GCC **15**——duckdb-go 的 Windows 预编译库使用 emulated TLS，
+  GCC 16 起默认原生 TLS 会链接失败；CI 用 WinLibs GCC 15.2.0）。
+  Linux/Windows 优先 `-extldflags=-static` 全静态链接（失败时回退动态并告警），
   macOS 使用系统库。
 - **发布矩阵**：CI 用原生 runner 构建 linux amd64/arm64、darwin amd64/arm64、windows
   amd64；DuckDB 没有 windows/arm64 预编译库，该平台不再随发布提供。
