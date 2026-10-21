@@ -128,6 +128,9 @@ jobs:
           & (Join-Path $bin "gcc.exe") --version | Select-Object -First 1
 
       - name: 构建并打包 ${{ matrix.target }}
+        # 与 dev-release 一致：显式 bash。Windows 默认 pwsh，一旦这里改用 $VAR
+        # （而不是 ${{ }} 表达式）就会拿到空值。
+        shell: bash
         run: bash scripts/build-release.sh "${{ needs.info.outputs.version }}" "${{ matrix.target }}"
 
       - uses: actions/upload-artifact@v7

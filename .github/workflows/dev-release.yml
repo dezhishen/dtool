@@ -154,6 +154,10 @@ jobs:
           & (Join-Path $bin "gcc.exe") --version | Select-Object -First 1
 
       - name: 构建并打包 ${{ matrix.target }}
+        # 必须显式 bash：Windows runner 默认 shell 是 pwsh，那里的 "$DEV_VERSION" 是
+        # PowerShell 变量（空值），环境变量要写 $env:DEV_VERSION——曾因此拿不到版本号，
+        # 脚本直接报 usage 并失败。
+        shell: bash
         run: bash scripts/build-release.sh "$DEV_VERSION" "${{ matrix.target }}"
 
       - uses: actions/upload-artifact@v7

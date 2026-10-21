@@ -13,7 +13,13 @@
 # 动态链接并明确告警。macOS 没有静态 libSystem，保持系统动态库。
 set -euo pipefail
 
-version="${1:?usage: build-release.sh <version> [os/arch]}"
+if [[ -z "${1:-}" ]]; then
+  echo "usage: build-release.sh <version> [os/arch]" >&2
+  echo '提示：版本号为空。若在 Windows 的 pwsh 里调用，"$VAR" 不会展开环境变量' >&2
+  echo '      （PowerShell 要写 $env:VAR）；CI 里请给该 step 加 shell: bash。' >&2
+  exit 2
+fi
+version="$1"
 target="${2:-$(go env GOOS)/$(go env GOARCH)}"
 os="${target%/*}"
 arch="${target#*/}"
