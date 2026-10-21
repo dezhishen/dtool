@@ -26,7 +26,7 @@ func main() {
 	for _, g := range []struct {
 		name string
 		gen  func(*rand.Rand) *excelize.File
-	}{{"sales.xlsx", sales}, {"hr.xlsx", hr}, {"messy.xlsx", messy}} {
+	}{{"sales.xlsx", sales}, {"hr.xlsx", hr}, {"messy.xlsx", messy}, {"studio.xlsx", studio}} {
 		name, gen := g.name, g.gen
 		f := gen(r)
 		// 固定时间戳保证可复现，并避免写入库默认的作者信息
@@ -121,6 +121,122 @@ func hr(r *rand.Rand) *excelize.File {
 			hire.Format("2006-01-02"), perf, fmt.Sprintf("emp%s@example.com", id)})
 	}
 	put(f, "员工", rows, 10, 8, 10, 8, 10, 12, 8, 26)
+	return f
+}
+
+// studio 是「5 人设计工作室经营分析」场景的数据源，四张表放在同一个工作簿里：
+// 员工（10 人：5 名核心设计 + 5 名支持/兼职）、项目（40 个）、报销（60 笔）、
+// 考勤（9 个工作日 × 10 人 = 90 条）。
+//
+// 数据里刻意留了几处「真实世界会长这样」的东西：两单低价高工时的亏损项目、
+// 三成报销没有项目归属（管理费）、少量驳回的报销、请假与加班并存。
+func studio(r *rand.Rand) *excelize.File {
+	f := excelize.NewFile()
+	f.SetSheetName("Sheet1", "员工")
+	f.NewSheet("项目")
+	f.NewSheet("报销")
+	f.NewSheet("考勤")
+
+	emp := [][]any{
+		{"员工ID", "姓名", "岗位", "级别", "入职日期", "月薪"},
+		{"E01", "沈一", "设计总监", "P8", "2019-03-04", 45000},
+		{"E02", "陆遥", "资深设计师", "P6", "2021-07-12", 28000},
+		{"E03", "方竹", "设计师", "P5", "2022-09-01", 22000},
+		{"E04", "何蓝", "设计师", "P5", "2023-04-17", 21500},
+		{"E05", "苏晴", "视觉设计", "P4", "2024-02-19", 18000},
+		{"E06", "郑维", "项目管理", "P6", "2020-11-02", 25000},
+		{"E07", "林默", "客户执行", "P4", "2023-08-07", 16000},
+		{"E08", "吴桐", "行政人事", "P3", "2022-01-10", 12000},
+		{"E09", "秦野", "兼职设计师", "P4", "2025-03-03", 9000},
+		{"E10", "顾南", "兼职摄影", "P4", "2025-06-16", 8000},
+	}
+	put(f, "员工", emp, 10, 8, 12, 8, 12, 10)
+
+	clients := []string{"晨光文创", "山海茶饮", "北方书店", "霁云咖啡", "拾光民宿", "沐野户外",
+		"知行教育", "蓝湾剧场", "和风家居", "星野宠物", "素问医疗", "云台科技"}
+	kinds := []struct {
+		name   string
+		lo, hi int // 合同金额区间（元）
+		hLo, h int // 投入工时区间（小时）
+	}{
+		{"品牌设计", 80000, 180000, 200, 380},
+		{"UI设计", 60000, 150000, 180, 320},
+		{"包装设计", 30000, 90000, 100, 220},
+		{"空间展陈", 120000, 300000, 300, 520},
+		{"插画", 15000, 50000, 60, 130},
+	}
+	owners := []string{"E01", "E02", "E02", "E03", "E03", "E04", "E05", "E06"}
+	proj := [][]any{{"项目ID", "项目名称", "客户", "项目类型", "开始日期", "结束日期",
+		"合同金额", "投入工时", "负责人ID", "状态"}}
+	for i := 1; i <= 40; i++ {
+		k := kinds[r.Intn(len(kinds))]
+		client := pick(r, clients)
+		start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, r.Intn(240))
+		end := start.AddDate(0, 0, 20+r.Intn(100))
+		amount := float64(k.lo + r.Intn((k.hi-k.lo)/1000+1)*1000)
+		hours := float64(k.hLo + r.Intn((k.h-k.hLo)/10+1)*10)
+		status := pick(r, []string{"已完成", "已完成", "已完成", "进行中", "已暂停"})
+		// 两单刻意做成亏损：低价 + 高工时（改稿与需求变更的典型结果）
+		if i == 7 || i == 23 {
+			amount = float64(k.lo)
+			hours = float64(k.h) * 1.6
+		}
+		var endCell any = end.Format("2006-01-02")
+		if status == "进行中" {
+			endCell = nil
+		}
+		proj = append(proj, []any{fmt.Sprintf("PRJ2026-%03d", i),
+			client + k.name, client, k.name,
+			start.Format("2006-01-02"), endCell, amount, hours, pick(r, owners), status})
+	}
+	put(f, "项目", proj, 14, 22, 12, 10, 12, 12, 12, 10, 10, 8)
+
+	cats := []struct {
+		name   string
+		lo, hi float64
+	}{
+		{"差旅", 300, 3200},
+		{"软件订阅", 99, 1200},
+		{"硬件", 500, 9000},
+		{"餐饮", 80, 900},
+		{"外包", 2000, 18000},
+		{"办公", 50, 600},
+	}
+	emps := []string{"E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09", "E10"}
+	bx := [][]any{{"报销ID", "日期", "员工ID", "项目ID", "费用类型", "金额", "状态"}}
+	for i := 1; i <= 60; i++ {
+		c := cats[r.Intn(len(cats))]
+		var pid any // 三成报销是行政/公共开支，没有项目归属
+		if r.Intn(10) < 7 {
+			pid = fmt.Sprintf("PRJ2026-%03d", 1+r.Intn(40))
+		}
+		d := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, r.Intn(270))
+		bx = append(bx, []any{fmt.Sprintf("BX2026-%03d", i), d.Format("2006-01-02"),
+			pick(r, emps), pid, c.name, round2(c.lo + r.Float64()*(c.hi-c.lo)),
+			pick(r, []string{"已批", "已批", "已批", "已批", "已批", "已批", "已批", "待批", "待批", "驳回"})})
+	}
+	put(f, "报销", bx, 14, 12, 10, 14, 12, 12, 8)
+
+	att := [][]any{{"日期", "员工ID", "出勤类型", "工时", "加班工时"}}
+	day := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	for n := 0; n < 9; { // 9 个工作日 × 10 人 = 90 条
+		if wd := day.Weekday(); wd != time.Saturday && wd != time.Sunday {
+			for _, e := range emps {
+				kind := pick(r, []string{"出勤", "出勤", "出勤", "出勤", "出勤", "出勤", "出勤", "远程", "远程", "请假"})
+				hours, ot := 8.0, 0.0
+				switch {
+				case kind == "请假":
+					hours = 0
+				case r.Intn(3) == 0:
+					ot = float64(1 + r.Intn(4))
+				}
+				att = append(att, []any{day.Format("2006-01-02"), e, kind, hours, ot})
+			}
+			n++
+		}
+		day = day.AddDate(0, 0, 1)
+	}
+	put(f, "考勤", att, 12, 10, 12, 8, 10)
 	return f
 }
 

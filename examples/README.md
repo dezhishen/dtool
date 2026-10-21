@@ -24,7 +24,7 @@ bash examples/01-sales-report/run.sh   # 单个示例
 | [04-pipeline-actions](04-pipeline-actions/README.md) | 不想一条条敲命令：Excel 直接要图要表，事后还能答出「数字怎么来的」 | `sales.xlsx` | `pipeline` 一条龙出折线图（含 `--group-by` 多系列）、复用已持久化数据集、`annotate` 注释、`--from` 血缘与 `trace`、失败诊断 |
 | [05-multi-series](05-multi-series/README.md) | 同一份数据要「区域 × 月份」和多指标曲线两种对比 | `sales.xlsx` | `--group-by` 长表透视出分组柱、`--missing gap` 折线断点、`--y a,b` 宽表直取出多折线、多系列参数校验与 Action 记录 |
 
-看完示例想按职业找场景，见 [docs/scenarios/](../docs/scenarios/README.md)（销售 / 财务 / HR / 电商 / 市场 / 管理 / BI）。
+看完示例想按角色找场景，见 [docs/scenarios/](../docs/scenarios/README.md)（销售/电商/增长、财务、HR、设计工作室经营、BI）。
 
 ## 数据字典
 
@@ -35,6 +35,12 @@ bash examples/01-sales-report/run.sh   # 单个示例
 **hr.xlsx**，工作表 `员工`：工号（`00101` 起，文本）、姓名、部门、职级、月薪、入职日期、绩效（2026 年入职者为空）、邮箱。
 
 **messy.xlsx**，工作表 `原始数据`：第 2 列表头为空、`名称` 重复、第 4 行整行为空、`B2:B3` 合并、手机号带前导零、`金额` 含 `N/A`、最后一行缺 `数量`。
+
+**studio.xlsx**（[docs/scenarios/studio.md](../docs/scenarios/studio.md) 用的经营分析数据）：
+- 工作表 `员工`：10 人（5 名核心设计 + 项目管理/客户执行/行政 + 2 名兼职），员工ID、姓名、岗位、级别、入职日期、月薪。
+- 工作表 `项目`：40 个，项目ID、项目名称、客户、项目类型（品牌设计/UI设计/包装设计/空间展陈/插画）、开始/结束日期、合同金额、投入工时、负责人ID、状态；其中 2 单刻意做成低价高工时的亏损项目。
+- 工作表 `报销`：60 笔，报销ID、日期、员工ID、项目ID（约三成无归属 = 管理费用）、费用类型、金额、状态（已批/待批/驳回）。
+- 工作表 `考勤`：90 条 = 2026-07 的 9 个工作日 × 10 人，日期、员工ID、出勤类型（出勤/远程/请假）、工时、加班工时。
 
 ## 重新生成数据源
 
