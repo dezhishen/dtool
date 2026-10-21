@@ -16,6 +16,7 @@ func TestExampleDataSources(t *testing.T) {
 		return p
 	}
 	sales, hr, messy := abs("sales.xlsx"), abs("hr.xlsx"), abs("messy.xlsx")
+	studio := abs("studio.xlsx")
 	t.Chdir(t.TempDir())
 
 	conv := func(file, sheet, name string) map[string]any {
@@ -73,6 +74,47 @@ func TestExampleDataSources(t *testing.T) {
 	q, err = run(t, "query", "--sql", `SELECT substr("日期", 1, 7) AS m, SUM("金额") AS s FROM orders GROUP BY 1 ORDER BY 1`)
 	if err != nil || q["row_count"].(float64) != 6 {
 		t.Fatalf("monthly: %v %v", q, err)
+	}
+	// studio.xlsx：docs/scenarios/studio.md 的四张表基线。文档里的「两单亏损」
+	// 「三成报销没有项目归属」都建立在这些行数上，数据一改就得重新核对文档。
+	for _, c := range []struct {
+		sheet string
+		name  string
+		n     float64
+	}{
+		{"员工", "studio_emp", 10},
+		{"项目", "studio_proj", 40},
+		{"报销", "studio_exp", 60},
+		{"考勤", "studio_att", 90},
+	} {
+		if m := conv(studio, c.sheet, c.name); m["record_count"].(float64) != c.n || m["warnings"] != nil {
+			t.Fatalf("studio/%s: %v", c.sheet, m)
+		}
+	}
+	// 文档口径：毛利 = 合同金额 − 投入工时 × 负责人月薪/176 − 直接费用。
+	// 亏损单为 0 说明"两单刻意亏损"失效了；未结项的结束日期必须保持 NULL。
+	q, err = run(t, "query", "--rows", "--sql", `SELECT
+			COUNT(*) FILTER (WHERE p."合同金额" - p."投入工时" * e."月薪" / 176.0
+				- COALESCE(f."直接费用", 0) < 0) AS loss,
+			COUNT(*) FILTER (WHERE p."结束日期" IS NULL) AS open_cnt
+		FROM studio_proj p JOIN studio_emp e ON p."负责人ID" = e."员工ID"
+		LEFT JOIN (SELECT "项目ID", SUM("金额") AS "直接费用" FROM studio_exp
+			WHERE "项目ID" IS NOT NULL GROUP BY 1) f ON f."项目ID" = p."项目ID"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row = q["rows"].([]any)[0].(map[string]any)
+	if row["loss"].(float64) != 2 || row["open_cnt"].(float64) != 8 {
+		t.Fatalf("studio 项目不变量: %v", row)
+	}
+	// 报销要留出「公共开支没有项目归属」的部分，否则按项目摊费用就看不出差别。
+	q, err = run(t, "query", "--rows", "--sql",
+		`SELECT COUNT(*) FILTER (WHERE "项目ID" IS NULL) AS no_proj FROM studio_exp`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := q["rows"].([]any)[0].(map[string]any)["no_proj"].(float64); n < 10 {
+		t.Fatalf("studio 报销无项目归属只有 %v 条", n)
 	}
 }
 
