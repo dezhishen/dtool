@@ -71,8 +71,8 @@ Agent 侧的行为约定（先 `datasets show` 再写 SQL、默认只交付文�
 
 ## 四条通用规则
 
-1. **中文列名可以直接写**：`SELECT 区域, SUM(金额) FROM orders GROUP BY 1`。
-   列名含空格或重名时用双引号，如 `"名称_2"`。
+1. **中文列名可以直接写**：`SELECT 区域, SUM(金额) FROM orders GROUP BY 1`（SQLite 与 DuckDB 都支持）。
+   列名含空格、以数字开头或重名时用双引号，如 `"名称_2"`；**文件路径**当表名时必须双引号。
 2. **SQL 常量用单引号**，所以整条 SQL 建议在 shell 里用双引号包住：
    `dtool query --sql "SELECT ... WHERE 状态 = '已退款'"`。
 3. **`--max-rows` 超限会报错**（默认 10000），不会静默截断：加 `LIMIT`，或 `--max-rows 0` 放开。

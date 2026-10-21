@@ -437,6 +437,9 @@ dtool convert \
 | `--layout` | 否 | 使用已确认的表结构文件（JSON），不再自动探测；对不上直接报错 |
 | `--tags` | 否 | Action 标签 |
 
+`convert` **不接受** `--source` / `--engine` / `--load-mode`：数据源由 `--input` 指定，
+`--engine`/`--load-mode` 只作用于 query/pipeline 的装入与查询（传了会在 stderr 提示已忽略）。
+
 **输出**：写入数据集 `.dtool/datasets/<name>/data.json`（及 `data.schema.json`、`dataset.json`），同时生成 Action 记录；同名数据集被覆盖并刷新更新日期。Schema 总会生成。
 
 **转换规则**（避免静默数据损坏）：
@@ -519,11 +522,20 @@ dtool query \
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| `--sql` | 是 | SQL 语句，表名使用 JSON 文件路径 |
+| `--sql` | 是 | SQL 语句；表名可用数据集名、`--source` 别名或双引号包裹的文件路径 |
+| `--source` | 否 | 显式绑定数据源 `别名=引用`（文件 / `dataset:<名>` / `action:<id>` / `latest:<type>`），可重复。**只属于 query / pipeline / meminfo，convert 不接受该参数** |
 | `--from` | 否 | 派生来源，用于关联上游 Action |
 | `--format` | 否 | 输出格式：`json` / `csv` / `markdown` / `table` / `xlsx`（xlsx 为二进制，必须配合 `--output`；数值写为数字单元格，表头加粗，列宽自适应） |
 | `--output` | 否 | 输出文件路径 |
 | `--rows` | 否 | `normal` 下在 stdout 附带完整结果行；`strong`（默认）拒绝（code 6） |
+
+**标识符与输出约定**：
+
+- **中文列名可以直接裸写**（`SELECT 区域, SUM(金额) FROM orders GROUP BY 1`）——SQLite 与 DuckDB
+  都把非 ASCII 字节当标识符字符。只有含**空格**、以数字开头、或与关键字冲突时才需要双引号
+  （`"名称_2"`）。**文件路径**作为表名时必须用双引号或反引号（单引号是字符串常量）。
+- **没有 `--json` 开关**：查询结果固定写入 `.dtool/outputs/queries/<action_id>/result.json`，
+  stdout 只给交付清单（强隐私）或摘要（normal）。要别的格式用 `--format csv|markdown|table|xlsx` 配 `--output`。
 
 **内部实现**：
 

@@ -58,7 +58,8 @@ bash examples/01-sales-report/run.sh  # 也可 DTOOL=/path/to/dtool bash …
 ## 关键点
 
 - **一个工作表 = 一个数据集 = 一张表**：多工作表要分别 `convert`，之后反复查询不用再读 Excel。
-- **数据集名就是表名**，不必写文件路径；含中文的列名用双引号 `"金额"`。
+- **数据集名就是表名**，不必写文件路径；中文列名可以直接裸写（Linux/macOS 的 shell 里注意引号包裹整条 SQL 即可），
+  含空格或与关键字冲突时才加双引号（`"名称_2"`）。
 - **`latest:query`** 让「查询 → 出图」不必重跑 SQL；中间若插了别的命令，改用 `--input action:<id>`。
 - **`--group-by` 画多系列**：把 `(X, group, y)` 长表透视成「X 分类 × 系列」；`bar` 是分组柱、`line` 是多条折线。分类与系列按输入顺序（SQL `ORDER BY` 说了算），缺失组合补 0；同一个 `(x, group)` 重复出现会报错并提示先聚合。
 - **`--format`** 决定投递形态：`markdown` / `csv` / `xlsx` / `table` / `json`。
