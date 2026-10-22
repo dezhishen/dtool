@@ -100,7 +100,7 @@ Expand-Archive dtool.zip -DestinationPath .
 ## 版本与构建元数据
 
 ```bash
-dtool --version            # dtool version 1.2.0 (commit abc1234, built 2026-10-09T01:00:00Z, go1.27.1 linux/amd64)
+dtool --version            # dtool version 1.2.0 (commit abc1234, built 2026-10-09T01:00:00Z, go1.27.3 linux/amd64)
 dtool version              # JSON：version / channel / commit / commit_date / branch / dirty / build_date / build_id / build_url / builder / repo / go / compiler / cgo / os / arch
 dtool version --short      # 只输出版本号
 dtool version --deps       # 附带编译进二进制的依赖模块及版本

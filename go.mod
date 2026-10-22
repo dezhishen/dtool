@@ -1,6 +1,6 @@
 module github.com/dezhishen/dtool
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/duckdb/duckdb-go/v2 v2.10506.0

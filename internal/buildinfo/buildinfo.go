@@ -123,7 +123,7 @@ func (i Info) ShortCommit() string {
 	return c
 }
 
-// Summary 形如 "1.2.0 (commit abc1234, built 2026-10-09T01:00:00Z, go1.27.1 linux/amd64)"。
+// Summary 形如 "1.2.0 (commit abc1234, built 2026-10-09T01:00:00Z, go1.27.3 linux/amd64)"。
 func (i Info) Summary() string {
 	built := i.BuildDate
 	if built == "" {
