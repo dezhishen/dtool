@@ -98,7 +98,7 @@ jobs:
 
       - name: Windows：缓存 WinLibs GCC 15 压缩包
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/winlibs.7z
           key: winlibs-gcc-15.2.0-ucrt-r7.7z
