@@ -101,7 +101,7 @@ grep -q '### 产物' <<<"$out" || fail "缺少 产物 段"
 grep -q '| linux/amd64 |' <<<"$out" || fail "缺少 linux/amd64 行"
 grep -q '本版不再提供：windows/arm64' <<<"$out" || fail "未识别被裁掉的平台"
 grep -qE '^\| windows/arm64' <<<"$out" && fail "已裁掉的平台不应出现在产物表格里"
-grep -q -- '-2.0 MB（-100%）' <<<"$out" || fail "未计算体积变化"
+grep -q -- '-2.0 MB（-100.0%）' <<<"$out" || fail "未计算体积变化"
 grep -q '| 无变化 |' <<<"$out" || fail "体积相同的平台应显示无变化"
 
 # 5) 无 PR 时不留空段，也不留占位文本
