@@ -32,6 +32,12 @@ case "$os" in
 esac
 
 cd "$(dirname "$0")/.."
+
+# 出错时把「哪一步、第几行、什么命令」写成 GitHub annotation（::error::）。
+# CI 日志需要仓库权限才能下载，annotation 却可以匿名读，排查时不用再等日志。
+step="初始化"
+trap 'echo "::error::build-release 在「${step}」失败（第 ${LINENO} 行）：${BASH_COMMAND}" >&2' ERR
+
 ldflags="$(bash scripts/ldflags.sh "$version")" # 各平台共用同一构建时间与元数据
 mkdir -p dist
 rm -f dist/*.tar.gz dist/*.zip dist/checksums.txt
@@ -43,6 +49,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 
 # notices 必须与二进制同上下文生成：CGO=1 时会链接 DuckDB。
+step="生成 THIRD_PARTY_NOTICES.md"
 GOOS="$os" GOARCH="$arch" CGO_ENABLED=1 \
   bash scripts/gen-notices.sh "$stage/THIRD_PARTY_NOTICES.md"
 
@@ -73,6 +80,7 @@ build() { # build [额外 ldflags]
     go build -trimpath -ldflags="${ldflags}${1:-}" -o "${stage}/${bin}" .
 }
 
+step="编译 ${target}"
 static=1
 [[ "$os" == darwin ]] && static=0
 if ((static)); then
@@ -86,6 +94,7 @@ fi
 
 # 冒烟：目标平台与当前平台一致时，启动一次产物。Windows 上这会暴露缺失的运行时
 # DLL（例如静态链接失败回退成动态链接时），避免把跑不起来的包发出去。
+step="冒烟运行产物"
 if [[ "$(go env GOOS)/$(go env GOARCH)" == "$target" ]]; then
   "${stage}/${bin}" version >/dev/null
   echo "smoke ok: ${target}"
@@ -93,6 +102,7 @@ fi
 
 # 手册的源是标准 Agent Skill 包（skills/<name>/SKILL.md），归档里也按这个名字
 # 放：这样解包后既能直接读，也能整份丢进平台的技能目录（<平台目录>/dtool/SKILL.md）。
+step="打包归档"
 cp README.md LICENSE "${stage}/"
 cp skills/dtool/SKILL.md "${stage}/SKILL.md"
 if [[ "$os" == windows ]]; then
