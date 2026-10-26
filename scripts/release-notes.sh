@@ -5,7 +5,7 @@
 #   1. 分组条目   —— conventional commits 前缀归类（feat / fix / docs / 其余）
 #   2. 破坏性变更 —— `type!:` 或提交正文含 `BREAKING CHANGE`
 #   3. 依赖变化   —— 对比基线与本 tag 的 go.mod（新增 / 升级 / 移除）
-#   4. 产物       —— dist/ 里的归档 + 上一版 Release 的资产（平台增减、体积变化）
+#   4. 产物       —— dist/ 里的归档 + 上一版 Release 的资产（只列平台与平台增减）
 # PR 列表仍走 GitHub generate-notes；仓库不开 PR 时整段自动省略。
 #
 # 用法: release-notes.sh <tag> <prev-tag|""> [repo] [dist-dir]
@@ -133,7 +133,9 @@ if [[ -n "$prev" ]] && mods_of "$prev" >"$tmpd/mod_old" 2>/dev/null \
   fi
 fi
 
-# ---------- 产物：平台增减与体积 ----------
+# ---------- 产物：只列平台 ----------
+# 刻意不列体积：预览版之间差几十字节没有信息量，还会稀释"某平台退出支持"这类真信号。
+# 归档是否完整由 CI 的启动冒烟与 checksums 兜底，这里只负责"这一版有哪些平台"。
 platform_of() {
   local n="$1"
   n="${n%.tar.gz}"
@@ -141,22 +143,24 @@ platform_of() {
   printf '%s' "$n" | awk -F_ '{print $(NF-1) "/" $NF}'
 }
 
-gh_assets() { # $1 = tag
-  gh api "repos/${repo}/releases/tags/${1}" --jq \
-    '.assets[] | select(.name | test("\\.(tar\\.gz|zip)$")) | "\(.name)\t\(.size)"' 2>/dev/null \
-    | while IFS=$'\t' read -r n s; do printf '%s\t%s\n' "$(platform_of "$n")" "$s"; done
+gh_assets() { # $1 = tag；输出平台名
+  gh api "repos/${repo}/releases/tags/${1}" --jq '.assets[].name' 2>/dev/null \
+    | while IFS= read -r n; do
+        case "$n" in
+          *.tar.gz | *.zip) platform_of "$n" ;;
+        esac
+      done
 }
 
 collect_current() {
-  local f
+  local f n=0
   shopt -s nullglob
-  local files=("$dist"/*.tar.gz "$dist"/*.zip)
+  for f in "$dist"/*.tar.gz "$dist"/*.zip; do
+    n=$((n + 1))
+    platform_of "$(basename "$f")"
+  done
   shopt -u nullglob
-  if (( ${#files[@]} > 0 )); then
-    for f in "${files[@]}"; do
-      printf '%s\t%s\n' "$(platform_of "$(basename "$f")")" "$(wc -c <"$f" | tr -d ' ')"
-    done
-  elif have_gh; then
+  if ((n == 0)) && have_gh; then
     gh_assets "$tag"
   fi
 }
@@ -167,65 +171,22 @@ collect_prev() {
   gh_assets "$prev"
 }
 
-mb() { awk -v b="$1" 'BEGIN { printf "%.1f MB", b / 1048576 }'; }
-delta() { # $1 = 本次字节, $2 = 上一版字节
-  # 差值太小时百分比会被四舍五入成 "+0.0%"（甚至 "-0 KB"），所以按量级换单位：
-  # 相等→"无变化"，<1 KB→字节，<1 MB→KB，再大→MB 并附百分比。
-  awk -v c="$1" -v o="$2" 'BEGIN {
-    if (o <= 0) { print "—"; exit }
-    d = c - o
-    if (d == 0) { print "无变化"; exit }
-    ad = (d < 0 ? -d : d)
-    if (ad < 1024) printf "%+d B", d
-    else if (ad < 1048576) printf "%+.1f KB", d / 1024
-    else printf "%+.1f MB（%+.1f%%）", d / 1048576, d * 100 / o
-  }'
-}
+join_list() { awk '{ printf "%s%s", (n++ ? "、" : ""), $0 } END { print "" }'; }
 
-collect_current | LC_ALL=C sort >"$tmpd/cur"
-collect_prev | LC_ALL=C sort >"$tmpd/pre"
+collect_current | LC_ALL=C sort -u >"$tmpd/cur"
+collect_prev | LC_ALL=C sort -u >"$tmpd/pre"
 if [[ -s "$tmpd/cur" ]]; then
   echo "### 产物"
   echo
-  awk -F'\t' '{print $1}' "$tmpd/cur" | LC_ALL=C sort -u >"$tmpd/cur_p"
-  awk -F'\t' '{print $1}' "$tmpd/pre" | LC_ALL=C sort -u >"$tmpd/pre_p"
-  # 没有上一版资产时不做"新增/移除平台"的推断：否则全部平台都会被误报成新增。
-  dropped=""
-  addedp=""
+  printf -- '- 平台：%s\n' "$(join_list <"$tmpd/cur")"
+  # 没有上一版资产时不做平台增减推断，否则全部平台都会被误报成新增。
   if [[ -s "$tmpd/pre" ]]; then
-    dropped="$(comm -13 "$tmpd/cur_p" "$tmpd/pre_p" 2>/dev/null | tr '\n' ' ' | sed -e 's/ *$//' || true)"
-    addedp="$(comm -23 "$tmpd/cur_p" "$tmpd/pre_p" 2>/dev/null | tr '\n' ' ' | sed -e 's/ *$//' || true)"
-  fi
-  if [[ -s "$tmpd/pre" ]]; then
-    echo "| 平台 | 大小 | 较上一版 |"
-    echo "| --- | --- | --- |"
-    LC_ALL=C join -t $'\t' -a1 -a2 -e- -o '0,1.2,2.2' "$tmpd/cur" "$tmpd/pre" \
-      | LC_ALL=C sort \
-      | while IFS=$'\t' read -r plat c p; do
-          # 本版已不再提供的平台只在下方条目里列出，不进表格（否则会出现 0.0 MB 这种行）
-          [[ "$c" == "-" ]] && continue
-          if [[ "$p" == "-" ]]; then
-            printf '| %s | %s | 新增平台 |\n' "$plat" "$(mb "$c")"
-          else
-            printf '| %s | %s | %s |\n' "$plat" "$(mb "$c")" "$(delta "$c" "$p")"
-          fi
-        done
+    dropped="$(comm -13 "$tmpd/cur" "$tmpd/pre" | join_list)"
+    addedp="$(comm -23 "$tmpd/cur" "$tmpd/pre" | join_list)"
+    [[ -n "$dropped" ]] && printf -- '- 本版不再提供：%s\n' "$dropped"
+    [[ -n "$addedp" ]] && printf -- '- 本版新增平台：%s\n' "$addedp"
   else
-    echo "| 平台 | 大小 |"
-    echo "| --- | --- |"
-    while IFS=$'\t' read -r plat c; do
-      printf '| %s | %s |\n' "$plat" "$(mb "$c")"
-    done <"$tmpd/cur"
-  fi
-  echo
-  if [[ -n "${dropped// /}" ]]; then
-    echo "- 本版不再提供：${dropped}"
-  fi
-  if [[ -n "${addedp// /}" ]]; then
-    echo "- 本版新增平台：${addedp}"
-  fi
-  if [[ ! -s "$tmpd/pre" ]]; then
-    echo "- 没有可对比的上一版资产（首次发布或取不到上一版 Release）。"
+    echo "- 没有可对比的上一版资产（首次发布或取不到上一版 Release），未做平台增减推断。"
   fi
   echo
 fi

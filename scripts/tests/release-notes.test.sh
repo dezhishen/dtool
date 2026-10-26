@@ -71,8 +71,8 @@ printf '%s\n' \
   '<!-- Release notes generated using configuration in .github/release.yml at v0.2.0 -->' \
   '' '' \
   '**Full Changelog**: https://example.invalid/compare/v0.1.0...v0.2.0' >"$tmp/empty.md"
-printf 'dtool_0.1.0_linux_amd64.tar.gz\t2097152\n' >"$tmp/assets.txt"
-printf 'dtool_0.1.0_windows_amd64.zip\t2097152\n' >>"$tmp/assets.txt"
+printf '%s\n' dtool_0.1.0_linux_amd64.tar.gz dtool_0.1.0_windows_amd64.zip \
+  dtool_0.1.0_windows_arm64.zip >"$tmp/assets.txt"
 printf 'dtool_0.1.0_windows_arm64.zip\t1024\n' >>"$tmp/assets.txt"
 
 out="$(PATH="$tmp/bin:$PATH" GH_TOKEN=x FAKE_BODY="$tmp/empty.md" FAKE_ASSETS="$tmp/assets.txt" \
@@ -96,13 +96,12 @@ grep -q -- '- 新增：`example.com/new` v0.2.0（间接）' <<<"$out" || fail "
 grep -q -- '- 升级：`example.com/old` v1.0.0 → v1.1.0' <<<"$out" || fail "未识别升级依赖"
 grep -q -- '- 移除：`example.com/gone` v0.9.0' <<<"$out" || fail "未识别移除依赖"
 
-# 4) 产物：平台增减与体积都从实物推导
+# 4) 产物：只列平台与平台增减，不列体积
 grep -q '### 产物' <<<"$out" || fail "缺少 产物 段"
-grep -q '| linux/amd64 |' <<<"$out" || fail "缺少 linux/amd64 行"
+grep -q '^- 平台：.*linux/amd64' <<<"$out" || fail "平台清单缺少 linux/amd64"
 grep -q '本版不再提供：windows/arm64' <<<"$out" || fail "未识别被裁掉的平台"
-grep -qE '^\| windows/arm64' <<<"$out" && fail "已裁掉的平台不应出现在产物表格里"
-grep -q -- '-2.0 MB（-100.0%）' <<<"$out" || fail "未计算体积变化"
-grep -q '| 无变化 |' <<<"$out" || fail "体积相同的平台应显示无变化"
+grep -qE '^- 平台：.*windows/arm64' <<<"$out" && fail "已裁掉的平台不应出现在平台清单里"
+grep -q 'MB' <<<"$out" && fail "说明里不应列举体积"
 
 # 5) 无 PR 时不留空段，也不留占位文本
 grep -q '### Pull Requests' <<<"$out" && fail "无 PR 时不应输出 Pull Requests 段"
