@@ -47,6 +47,15 @@ else
   prev="$(git describe --tags --abbrev=0 "${exclude[@]}" --exclude '*-preview.*' "${tag}^" 2>/dev/null || true)"
 fi
 
+# prev 只该在"仓库里还没有任何更早的版本 tag"（首次发布）时为空。除此之外它为空
+# 只有一个原因：本地/克隆里不存在这个 tag（`${tag}^` 解析失败，例如打 tag 前在本机
+# 干跑，或 clone 没取到 tag）。这时发布说明会退化成"首次发布"+ 全历史 commits，
+# 而且不会报错 —— 必须让人看到，而不是静默发布一份错说明。
+if [[ -z "$prev" ]] && git tag -l 'v[0-9]*' | grep -qvx "$tag"; then
+  echo "warning: tag '$tag' 不在本地（其余 version tag 存在），对比基线解析为空；" \
+    "发布说明会退化成全历史。请确认这是首次发布，或在完整 clone（含 tag）上运行。" >&2
+fi
+
 echo "kind=${kind}"
 echo "prev=${prev}"
 echo "version=${tag#v}"
