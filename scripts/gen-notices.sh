@@ -29,7 +29,7 @@ detect_licenses() {
   local t hits=""
   t="$(tr '[:upper:]' '[:lower:]' | tr -s '[:space:]' ' ')"
   has() { [[ "$t" == *"$1"* ]]; }
-  add() { hits="${hits:+$hits、}$1"; }
+  add() { hits="${hits:+${hits}、}$1"; }   # 变量必须带 {}：Apple bash 3.2 会把紧跟的「、」算进变量名
   has "permission is hereby granted, free of charge" && add "MIT"
   has "permission to use, copy, modify, and/or distribute this software" && add "ISC"
   has "this is free and unencumbered software released into the public domain" && add "Unlicense"
@@ -126,15 +126,15 @@ HDR
   fi
   while IFS='|' read -r m listed chosen; do
     [[ -n "$m" ]] || continue
-    echo "- 双许可取舍：\`$m\` 并列 $listed，本项目选用 **$chosen**，下方只收录 $chosen 全文（另一份许可证的全文不收录）。"
+    echo "- 双许可取舍：\`$m\` 并列 ${listed}，本项目选用 **$chosen**，下方只收录 $chosen 全文（另一份许可证的全文不收录）。"
   done <<<"$DUAL_LICENSE"
   while IFS='|' read -r m file asset lic owner; do
     [[ -n "$m" ]] || continue
     mdir="$(awk -F'|' -v m="$m" '$1 == m { print $3; exit }' "$tmpd/mods")"
     if [[ -n "$mdir" && -f "$mdir/$file" ]] && grep -q "is the .* of" "$mdir/$file" 2>/dev/null; then
-      echo "- 内嵌资源：\`$m\` 的 \`$file\` 内联了 $asset（$lic，版权归 $owner）。"
+      echo "- 内嵌资源：\`$m\` 的 \`$file\` 内联了 ${asset}（${lic}，版权归 ${owner}）。"
     else
-      echo "gen-notices: 内嵌资源登记未通过校验（$m / $file），请更新脚本里的 INLINED_ASSETS。" >&2
+      echo "gen-notices: 内嵌资源登记未通过校验（$m / ${file}），请更新脚本里的 INLINED_ASSETS。" >&2
     fi
   done <<<"$INLINED_ASSETS"
   echo
@@ -157,7 +157,7 @@ HDR
     chosen="$(awk -F'|' -v m="$path" '$1 == m { print $3; exit }' <<<"$DUAL_LICENSE")"
     if [[ -n "$chosen" ]]; then
       extra="$dir/licenses/$(printf '%s' "$chosen" | tr '[:upper:]' '[:lower:]').txt"
-      [[ -f "$extra" ]] || { echo "gen-notices: $path 声明选用 $chosen，但缺少 $extra" >&2; exit 1; }
+      [[ -f "$extra" ]] || { echo "gen-notices: $path 声明选用 ${chosen}，但缺少 $extra" >&2; exit 1; }
       files="$files"$'\n'"$extra"
       files="$(grep -v '^$' <<<"$files" | grep -iv '/license$' || true)$(printf '\n%s' "$dir/LICENSE")"
     fi

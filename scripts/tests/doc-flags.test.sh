@@ -52,7 +52,7 @@ while read -r f; do
     if printf '%s\n' "${EXTERNAL_FLAGS[@]}" | grep -qx -- "$f"; then
       continue
     fi
-    echo "FAIL: 文档提到了 CLI 没有的开关 $f（要么删文档，要么加进 EXTERNAL_FLAGS 白名单）" >&2
+    echo "FAIL: 文档提到了 CLI 没有的开关 ${f}（要么删文档，要么加进 EXTERNAL_FLAGS 白名单）" >&2
     fail=1
   fi
 done <"$tmp/doc.txt"
@@ -63,7 +63,7 @@ while read -r f; do
   [[ -n "$f" ]] || continue
   printf '%s\n' "${BUILTIN_FLAGS[@]}" | grep -qx -- "$f" && continue
   if ! grep -qx -- "$f" "$tmp/design.txt"; then
-    echo "FAIL: CLI 有开关 $f，但 Design.md 没写（参考文档必须覆盖全部开关）" >&2
+    echo "FAIL: CLI 有开关 ${f}，但 Design.md 没写（参考文档必须覆盖全部开关）" >&2
     fail=1
   fi
 done <"$tmp/cli.txt"

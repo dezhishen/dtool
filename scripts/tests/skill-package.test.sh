@@ -20,7 +20,7 @@ bad() { echo "FAIL: $1" >&2; fail=1; }
 skill="skills/dtool/SKILL.md"
 
 # 1) 布局：一个技能一个目录，里面是 SKILL.md
-[[ -f "$skill" ]] || bad "缺少 $skill（Agent Skill 约定：<技能目录>/SKILL.md）"
+[[ -f "$skill" ]] || bad "缺少 ${skill}（Agent Skill 约定：<技能目录>/SKILL.md）"
 [[ -e "skills.md" ]] && bad "根目录还有 skills.md：手册只能有一份，别复制成两份（改了这份、忘了那份）"
 
 if [[ -f "$skill" ]]; then

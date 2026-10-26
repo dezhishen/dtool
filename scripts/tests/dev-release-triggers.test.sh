@@ -21,7 +21,7 @@ triggers="$(awk '
 
 want="schedule workflow_dispatch "
 if [[ "$triggers" != "$want" ]]; then
-  echo "FAIL: $wf 的触发方式应为「$want」，实际「$triggers」" >&2
+  echo "FAIL: $wf 的触发方式应为「${want}」，实际「${triggers}」" >&2
   echo "      只保留定时 + 手动：push 触发会让每次提交都重建并覆盖整套 dev 资产，" >&2
   echo "      还会让 commit 去重失效。想立刻要 dev 请手动触发 workflow。" >&2
   fail=1

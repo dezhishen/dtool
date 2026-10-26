@@ -18,7 +18,7 @@ check() { # check <描述> <期望 release=值> <期望 reason 片段> <提交> 
     out="$(bash scripts/dev-release-decision.sh "$commit" /nonexistent/dev-build.txt)"
   fi
   if ! grep -q "^release=${want}$" <<<"$out"; then
-    echo "FAIL: $desc → 期望 release=$want，实际：$(tr '\n' ' ' <<<"$out")" >&2; fail=1
+    echo "FAIL: $desc → 期望 release=${want}，实际：$(tr '\n' ' ' <<<"$out")" >&2; fail=1
   fi
   if [[ -n "$fragment" ]] && ! grep -q "$fragment" <<<"$out"; then
     echo "FAIL: $desc → reason 缺少 '$fragment'，实际：$(tr '\n' ' ' <<<"$out")" >&2; fail=1

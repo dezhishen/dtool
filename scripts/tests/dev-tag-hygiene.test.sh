@@ -28,13 +28,13 @@ mk_repo() { # mk_repo <目录> <dev 位置：head|prev>
 # ① 本地版本计算：dev 落在 HEAD（最坏情形）时也不能变成 dev
 mk_repo "$tmp/head" head
 v="$(bash "$repo_root/scripts/version.sh")"
-assert "dev 在 HEAD 时版本不应含 dev（得到 $v）" "[[ \"\$v\" != *dev* ]]"
-assert "版本应退回最近的版本 tag（得到 $v）" "[[ \"\$v\" == v0.* ]]"
+assert "dev 在 HEAD 时版本不应含 dev（得到 ${v}）" "[[ \"\$v\" != *dev* ]]"
+assert "版本应退回最近的版本 tag（得到 ${v}）" "[[ \"\$v\" == v0.* ]]"
 
 # ①' dev 落后一个提交时同理（此时容易变成 dev-1-g<sha>）
 mk_repo "$tmp/behind" behind
 v="$(bash "$repo_root/scripts/version.sh")"
-assert "dev 落后时版本不应含 dev（得到 $v）" "[[ \"\$v\" != *dev* ]]"
+assert "dev 落后时版本不应含 dev（得到 ${v}）" "[[ \"\$v\" != *dev* ]]"
 
 # ② 发版对比基线：preview 与 stable 都不能把 dev 当基线
 for kind in preview stable; do

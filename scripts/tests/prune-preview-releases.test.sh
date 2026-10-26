@@ -14,7 +14,7 @@ check() { # check <说明> <期望> <保留天数> <fixture...>
   shift 3
   local got
   got="$(printf '%s\n' "$@" | select_prune "$days" "$now")"
-  [[ "$got" == "$want" ]] || fail "$desc：得到 [$got]，期望 [$want]"
+  [[ "$got" == "$want" ]] || fail "${desc}：得到 [$got]，期望 [$want]"
 }
 
 # 正式版已存在：到期（30 天前发布）要删，没到期（15 天前…）也删——

@@ -26,7 +26,7 @@ arch="${target#*/}"
 case "$os" in
   linux | darwin | windows) ;;
   *)
-    echo "不支持的平台：$target（可选 linux/darwin/windows）" >&2
+    echo "不支持的平台：${target}（可选 linux/darwin/windows）" >&2
     exit 1
     ;;
 esac

@@ -51,4 +51,4 @@ if [[ "$recorded" == "$current" ]]; then
   exit 0
 fi
 echo "release=true"
-echo "reason=main 有新提交（$recorded → $current），需要重新发布"
+echo "reason=main 有新提交（${recorded} → ${current}），需要重新发布"
