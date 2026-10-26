@@ -6,7 +6,9 @@
 #   2. 破坏性变更 —— `type!:` 或提交正文含 `BREAKING CHANGE`
 #   3. 依赖变化   —— 对比基线与本 tag 的 go.mod（新增 / 升级 / 移除）
 #   4. 产物       —— dist/ 里的归档 + 上一版 Release 的资产（只列平台与平台增减）
-# PR 列表仍走 GitHub generate-notes；仓库不开 PR 时整段自动省略。
+# 不再拼接 GitHub generate-notes 的正文：那会重复列出同一批改动（它按 PR 分类，
+# 小节名还会和上面的分组撞车，并带 "New Contributors" 之类的噪音）；PR 编号本身
+# 就在提交标题里（如 "(#7)"），提交明细已足够追溯。
 #
 # 用法: release-notes.sh <tag> <prev-tag|""> [repo] [dist-dir]
 set -euo pipefail
@@ -189,27 +191,6 @@ if [[ -s "$tmpd/cur" ]]; then
     echo "- 没有可对比的上一版资产（首次发布或取不到上一版 Release），未做平台增减推断。"
   fi
   echo
-fi
-
-# ---------- PR 列表（GitHub generate-notes，仓库不开 PR 时自动省略）----------
-prs=""
-if have_gh; then
-  args=(-f "tag_name=${tag}")
-  [[ -n "$prev" ]] && args+=(-f "previous_tag_name=${prev}")
-  prs="$(gh api -X POST "repos/${repo}/releases/generate-notes" "${args[@]}" --jq .body 2>/dev/null || true)"
-  # 无 PR 时 GitHub 只回 HTML 注释 + Full Changelog 链接，一律剥掉；正文为空就不出这段。
-  prs="$(printf '%s\n' "$prs" | awk '
-    /^## What.s Changed$/      { next }
-    /^<!--.*-->$/              { next }
-    /^\*\*Full Changelog\*\*:/ { next }
-    /^[[:space:]]*$/           { if (n) blank = 1; next }
-    { if (blank) { buf[n++] = ""; blank = 0 } buf[n++] = $0 }
-    END { for (i = 0; i < n; i++) print buf[i] }')"
-fi
-if [[ -n "$prs" ]]; then
-  echo "### Pull Requests"
-  echo
-  printf '%s\n\n' "$prs"
 fi
 
 # ---------- 提交明细 ----------

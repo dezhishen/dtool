@@ -124,4 +124,11 @@ out3="$(PATH="$tmp/bin:$PATH" GH_TOKEN=x FAKE_BODY="$tmp/empty.md" FAKE_ASSETS=/
   bash "$script" v0.2.0 v0.1.0 example.com/x "$tmp/no-such-dist")"
 grep -q '### 产物' <<<"$out3" && fail "没有产物时不应输出 产物 段"
 
+# 9) 小节标题不重复：曾因为拼接 GitHub 的 PR 正文，出现两个「### 其他」
+dups="$(grep -E '^### ' <<<"$out" | LC_ALL=C sort | uniq -d)"
+[[ -z "$dups" ]] || fail "说明里有重复的小节标题：${dups}"
+
+# 10) 不拼接 GitHub generate-notes 的正文（New Contributors 之类的噪音）
+grep -q 'New Contributors' <<<"$out" && fail "不应出现 GitHub 生成的 New Contributors 段"
+
 echo "release-notes: OK"
