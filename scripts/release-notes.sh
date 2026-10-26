@@ -169,9 +169,15 @@ collect_prev() {
 
 mb() { awk -v b="$1" 'BEGIN { printf "%.1f MB", b / 1048576 }'; }
 delta() { # $1 = 本次字节, $2 = 上一版字节
+  # 差几百字节时不能四舍五入成 "+0.0 MB（+0%）"：小于 1 MB 的差值改用 KB，
+  # 完全相等时直接写"无变化"。
   awk -v c="$1" -v o="$2" 'BEGIN {
-    if (o > 0) { d = c - o; printf "%+.1f MB（%+.0f%%）", d / 1048576, d * 100 / o }
-    else printf "—"
+    if (o <= 0) { print "—"; exit }
+    d = c - o
+    if (d == 0) { print "无变化"; exit }
+    ad = (d < 0 ? -d : d)
+    if (ad < 1048576) printf "%+.0f KB（%+.1f%%）", d / 1024, d * 100 / o
+    else printf "%+.1f MB（%+.0f%%）", d / 1048576, d * 100 / o
   }'
 }
 
